@@ -20,6 +20,14 @@ Frame pacing: the host's frame step, engine frame limiters, present intervals an
 - **Fix:** the profile key `gpu_timestamps segment` makes each report take the GPU start (`TIMESTAMP_TOP`) or end (other types) of the `sub_cut` segment ([Submissions handed to the GPU in segments](#submissions-handed-to-the-gpu-in-segments)) it was encoded in (`rep_ticks` in `nvn_mtl.m`: MTL4CommitFeedback times converted to the guest clock, written in the last segment's handler as before). `DM_NVN_GPU_TS=submission` gives the old timestamps.
 - **Found on:** [The Legend of Zelda: Breath of the Wild](../../dm/games/01007EF00011E000/README.md) (legacy frame-step method): BotW's frame has 5 reports in one submission (`main+0xe94584`, `main+0xe94664`); with two more cuts the controller always takes the GPU path, and the GPU time now reads the frame's GPU span, gaps where the GPU waits for the host's translation included. Measured on the Mac with two BotW runs sharing the GPU under a heavy CPU load (load average about 75, a shader rebuild running): GPU time p50 16–23 ms; the fixed run stayed at interval 2 (3 while the GPU time passed 1.9 vsyncs, 1 for under 2% of the frames) at 0.93–0.98 of real time, while a run with `DM_NVN_GPU_TS=submission` spent 10–70% of its frames at interval 1 and ran at 0.78–0.95. The same GPU time drives the game's dynamic resolution.
 
+### Raw NVN timestamp units
+
+- **Symptom:** GPU time reads 32 times too small when a game converts raw NVN counter timestamps itself.
+- **Cause:** the host wrote reports in 19.2 MHz CPU ticks, while the raw NVN timestamp field uses 614.4 MHz ticks (384 ticks per 625 ns). Games calling `nvnDeviceGetTimestampInNanoseconds` saw correct time because its inverse conversion had the same wrong rate, but an inline conversion read a 16 ms span as 0.5 ms.
+- **Fix:** `nvn_timestamp.h` shares the 614.4 MHz conversions between all report writes (`gpu_ticks`, `rep_ticks`) and `nvnDeviceGetTimestampInNanoseconds`. Wide integer products preserve long uptimes. The guest clock epoch stays the same; CPU system counters stay at 19.2 MHz, and the API still returns nanoseconds.
+- **Found on:** [NieR:Automata The End of YoRHa Edition](../../dm/games/010056B015FE8000/README.md), whose dynamic-resolution controller subtracts two raw report timestamps and converts the difference inline.
+- **Check:** `t_timestamp` checks known vectors, long uptimes, round-trip precision and the game's exact inline arithmetic. `t_nvn` checks the API's known units and bounds a completed report between submit and fence wait.
+
 ## Engine frame limiters
 
 ### A render-thread limiter with a constant and a fixed time step
@@ -38,6 +46,15 @@ Frame pacing: the host's frame step, engine frame limiters, present intervals an
 - **Found on:** [Taiko Risshiden V DX](../../dm/games/0100346017304000/README.md), in its menus and town; its movies, paced by their own player, ran at 60.
 
 ## Present interval and display rate
+
+### Present thread rescues a silent display link
+
+- **Symptom:** the app is active and the game keeps running, but the picture freezes while display-link callbacks stop; the log repeatedly drops queued frames.
+- **Cause:** dropping frames releases the game's swapchain textures but never displays them. A display link may stop while the app is active, including an occluded Mac window.
+- **Fix:** after 500 ms of silence while active, `mtl_present_wait` requests rescue. `link_sync` invalidates the display link on its run loop before releasing the layer to the present thread, which takes its own drawables in mode 0. Retry delays are 3, 6, 12, 24, 48 and then at most 60 seconds. Rescue state changes take `g_pq_mu`; the requested `g_dm_present_link` stays unchanged, and a new runtime mode ends rescue immediately. A retry resets stall timing. Inactive and background time do not count towards the 500 ms threshold, including a focus timestamp newer than the watchdog's clock sample.
+- **Found on:** d2r-mobile commit `afad65c` (an iPhone picture froze for 80 seconds), carried through MacNativeGames `cf1e629` and [PR #198](https://github.com/seedds/nxnative/pull/198). That upstream title has no profile in this repository; no local game reproduction is claimed.
+- **Check:** `make -C dm/gfx/tests GAME=010015100B514000 t_present_rescue` and `dm/gfx/tests/t_present_rescue` exercise the production wait and retry paths with a controlled clock and a silent link double, without a GPU. They cover foreground grace, backoff saturation, runtime mode changes, and layer release only after run-loop invalidation. The test also runs in CPU graphics CI. `make -C dm/gfx/tests GAME=010015100B514000 check_t_present_rescue` adds a paused real Metal display link on an offscreen Mac layer: rescue invalidates it, then `nextDrawable` succeeds (47 checks, zero failures with Metal validation). `DM_TEST_LINK_STALL=<start seconds>,<duration seconds>` pauses a real window's display link for manual verification.
+- **Not checked:** gameplay during stalled-link recovery or the iPhone; the PR's gameplay runs were headless.
 
 ### Frames of a dynamic present interval held on screen and at the acquire
 
@@ -88,6 +105,22 @@ Frame pacing: the host's frame step, engine frame limiters, present intervals an
 - **Not checked:** the link's new range after a switch has not run here (Hades windowed and fullscreen paced at 60 as before).
 
 ## CPU cost and pacing
+
+### Arena buffer ownership on allocation
+
+- **Symptom:** autorelease work takes a measurable share of replay time, with temporary arena-buffer ownership traffic a few times per draw.
+- **Cause:** under ARC an unqualified `id<MTLBuffer> *` out-parameter is `__autoreleasing`, so assigning the arena buffer in `arena_alloc` autoreleases it. Reading `buf.length` also sends an Objective-C message on each allocation and while selecting or trimming arenas.
+- **Fix:** both declarations of `arena_alloc` use a `__strong` buffer out-parameter, matching every caller's strong local. `NvArena` caches its buffer length when created; allocation, reuse selection and idle trimming use that value. Buffer ownership and fence-based reuse remain the same.
+- **Found on:** MacNativeGames commit `0531f28`, ported in [PR #195](https://github.com/seedds/nxnative/pull/195), reports autorelease work falling from 2.63% to 1.73% of replay time; the PR does not identify the game for that measurement. It has not been repeated here.
+- **Check:** `t_ub`, `t_vbuf` and `t_geometry` exercise arena-backed uniform shadows, vertex conversion and geometry scratch on the Mac with Metal validation.
+
+### Registry lock priority inheritance
+
+- **Symptom:** the submit thread waits on the texture / sampler registry lock while a lower-priority registration thread is preempted holding it.
+- **Cause:** game threads register textures and samplers under `g_rmu`, which the submit thread also takes for argument encoding. The previous mutex allowed those owners to delay the higher-priority submitter.
+- **Fix:** `g_rmu` is an `os_unfair_lock`, lending a waiter's priority to its owner. All registration, lookup, cache, diagnostic and test callers use its lock API; the critical sections and lock order stay the same.
+- **Found on:** [The Legend of Zelda: Tears of the Kingdom](../../dm/games/0100F2C0115B6000/README.md), measured upstream in MacNativeGames commit `5f5de5e` and ported in [PR #195](https://github.com/seedds/nxnative/pull/195): in a shrine, game threads at priority 46 delayed the submit thread at priority 97 by about 1.8 ms a frame. Waiting fell from 155 to about 0 ms/s there, with unchanged frame time. Those game measurements have not been repeated here.
+- **Check:** `t_stencil_view`, `t_view_levels` and `t_view_swizzle` exercise production registry lookups and cached views with the new lock on the Mac.
 
 ### Submissions handed to the GPU in segments
 
