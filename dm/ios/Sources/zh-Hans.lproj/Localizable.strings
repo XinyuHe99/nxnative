@@ -1,0 +1,102 @@
+/* App interface translations. Game resources and diagnostic logs are unchanged. */
+"Game" = "游戏";
+"Version %@" = "版本 %@";
+"Play" = "开始游戏";
+"Memory available" = "可用内存";
+"Set by an env file" = "已由配置文件锁定";
+"Frame rate" = "目标帧率";
+"30 fps" = "30 帧/秒";
+"60 fps" = "60 帧/秒";
+"Render scale" = "渲染比例";
+"Frame buffering" = "帧缓冲";
+"May reduce stutter; adds display latency." = "可能减少卡顿，但会增加显示延迟。";
+"Performance HUD" = "性能调试界面";
+"Console mode" = "运行模式";
+"Docked" = "主机模式";
+"Handheld" = "掌机模式";
+"Game language" = "游戏语言";
+"Touch feedback" = "触控反馈";
+"Haptic clicks when pressing touch controls." = "按下虚拟按键时提供轻微振动反馈。";
+"Game rumble" = "游戏振动";
+"Vibration from the game on your phone or connected controller." = "通过手机或已连接的手柄呈现游戏振动。";
+"Rumble strength" = "振动强度";
+"Adjusts game rumble alongside the game's own vibration setting." = "配合游戏内的振动设置，调节振动强度。";
+"American English" = "英语（美国）";
+"British English" = "英语（英国）";
+"Japanese" = "日语";
+"French" = "法语";
+"German" = "德语";
+"Latin American Spanish" = "西班牙语（拉丁美洲）";
+"Spanish" = "西班牙语";
+"Italian" = "意大利语";
+"Dutch" = "荷兰语";
+"Canadian French" = "法语（加拿大）";
+"Portuguese" = "葡萄牙语";
+"Russian" = "俄语";
+"Korean" = "韩语";
+"Traditional Chinese" = "繁体中文";
+"Simplified Chinese" = "简体中文";
+"Brazilian Portuguese" = "葡萄牙语（巴西）";
+"Tap" = "触控";
+"OK" = "确定";
+"Cancel" = "取消";
+"Save failed" = "存档失败";
+"Storage is full, so progress was not saved. Free up space and save again." = "设备存储空间已满，进度未能保存。请释放空间后重新存档。";
+"Saving failed (errno %d); progress was not saved." = "存档失败（错误码 %d），进度未能保存。";
+"Game files not found.\nPut the RomFS folder into this App's Documents as \"romfs\" (Files app), then restart." = "未找到游戏文件。\n请通过“文件”应用，将 RomFS 文件夹以“romfs”为名放入本应用的文稿目录，然后重新启动应用。";
+
+/* Launcher */
+"Display" = "画面";
+"Controls & Haptics" = "操作与振动";
+"Other" = "其他";
+"Restore Defaults" = "恢复默认设置";
+"In game, swipe in from the left edge for the menu" = "游戏中从左边缘右滑打开菜单";
+
+/* In-game menu (GameMenu.swift) */
+"Swipe in from the left edge for the menu" = "从左边缘向右滑动打开菜单";
+"Paused" = "已暂停";
+"Running" = "运行中";
+"Close" = "关闭";
+"FPS" = "帧率";
+"Memory free" = "可用内存";
+"Thermal" = "温度";
+"Normal" = "正常";
+"Fair" = "偏高";
+"Serious" = "过热";
+"Critical" = "严重过热";
+"Battery" = "电量";
+"Resume" = "继续游戏";
+"Screenshot" = "截图";
+"Shake" = "摇晃手柄";
+"Mute" = "静音";
+"Unmute" = "取消静音";
+"Controls" = "虚拟手柄";
+"Layout" = "布局";
+"Opacity" = "不透明度";
+"Hide touch controls" = "隐藏按键";
+"Quit Game" = "退出游戏";
+"Quit the game?" = "要退出游戏吗？";
+"Quit" = "退出";
+"Progress since your last save will be lost." = "上次存档之后的进度将会丢失。";
+"Screenshot saved to Photos" = "截图已存入“照片”";
+"Screenshot saved to Files › Screenshots" = "截图已存入“文件” › Screenshots";
+"Screenshot failed" = "截图失败";
+
+/* In-game menu: performance and pause */
+"Pause while the menu is open" = "打开菜单时暂停";
+
+/* Performance overlay (launcher, menu, DmPerfPanel.m) */
+"Performance overlay" = "性能显示";
+"Off, frame rate or detailed performance panel." = "可关闭，或显示帧率与详细性能面板。";
+"Off" = "关闭";
+"Panel" = "面板";
+"Performance panel" = "性能面板";
+"Controller connected" = "已连接手柄";
+"frames/s" = "帧/秒";
+"Frame time" = "平均帧时";
+"Memory" = "内存";
+
+"GPU time" = "GPU 耗时";
+"CPU usage" = "CPU 占用";
+
+"Continue" = "继续";

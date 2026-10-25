@@ -1,6 +1,7 @@
 # iOS project (xcodegen); build_ipa.sh generates Gen/ and the game resource paths first. Xcode stages resources before signing; the unsigned IPA command skips that copy and packs directly from the external drive.
 name: DmIOS
 options:
+  developmentLanguage: zh-Hans
   bundleIdPrefix: ${DM_BUNDLE_ID}
   deploymentTarget:
     iOS: "26.0"   # Graphics replay uses Metal 4 (MTL4CommandQueue etc., from iOS 26)
@@ -29,6 +30,9 @@ targets:
     info:
       path: Gen/Info.plist
       properties:
+        CFBundleDevelopmentRegion: zh-Hans
+        CFBundleLocalizations:
+          - zh-Hans
         CFBundleDisplayName: ${DM_DISPLAY_NAME}   # the game name in the base NSP (set by build_ipa.sh)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleShortVersionString: $(MARKETING_VERSION)
@@ -41,6 +45,7 @@ targets:
         UIRequiresFullScreen: true
         UIStatusBarHidden: true
         UIViewControllerBasedStatusBarAppearance: false
+        NSPhotoLibraryAddUsageDescription: Screenshots taken from the in-game menu are saved to your photo library.   # GameMenu.swift; translated in Sources/<language>.lproj/InfoPlist.strings
         LSApplicationCategoryType: ${DM_APP_CATEGORY}   # game profile app_category
         DMShowFPS: ${DM_SHOW_FPS}           # YES = the frame-rate counter is on (front_ios.m; set by build_ipa.sh)
         DMLanguage: ${DM_LANG}              # the game language code (main.m sets DM_LANG from it; set by build_ipa.sh)
@@ -75,7 +80,8 @@ targets:
       GCC_C_LANGUAGE_STANDARD: gnu11
       OTHER_CFLAGS: $(inherited) -mcpu=apple-a18   # The host assembly contains LSE atomic instructions, which the default baseline does not accept
       CLANG_ENABLE_OBJC_ARC: YES
-      SWIFT_VERSION: "5.0"                         # Launcher.swift (SwiftUI)
+      SWIFT_VERSION: "5.0"                         # Launcher.swift, GameMenu.swift (SwiftUI)
+      SWIFT_OBJC_BRIDGING_HEADER: Sources/DmMenu.h # the C functions the in-game menu calls
       DEBUG_INFORMATION_FORMAT: dwarf
       GCC_WARN_INHIBIT_ALL_WARNINGS: YES
 schemes:
