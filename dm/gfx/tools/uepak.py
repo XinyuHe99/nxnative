@@ -230,12 +230,11 @@ class Pak:
             for _ in range(nblk): s = r.take('<I'); blocks.append((cur, s)); cur += (s + 15) & ~15 if enc else s
         return dict(off=off, raw=raw, size=size, method=self.methods[meth - 1] if meth else '', encrypted=enc, block_size=bsz, blocks=blocks)
     def read(self, path, decode=None):
-        """A file's bytes, block by block (each block holds block_size raw bytes, the last one the rest). Zlib, Gzip and LZ4 blocks are decoded here (OCTOPATH TRAVELER II: Zlib); any other
+        """A file's bytes, block by block (each block holds block_size raw bytes, the last one the rest). Zlib and LZ4 blocks are decoded here (OCTOPATH TRAVELER II: Zlib); any other
         method needs decode(block bytes, raw length) → bytes: the game's own decoder in the Mac host (shader_split.py oodle); Octopath Traveler 0's archives go through the Oodle job instead"""
         e = self.entry(path)
         if not e['method']: return self.read_at(e['off'] + 53, e['size'], e['encrypted'])
         if e['method'] == 'Zlib': import zlib; decode = lambda b, k: zlib.decompress(b)
-        elif e['method'] == 'Gzip': import zlib; decode = lambda b, k: zlib.decompress(b, 31)
         elif e['method'] == 'LZ4': import lz4.block; decode = lambda b, k: lz4.block.decompress(b, uncompressed_size=k)
         elif not decode: raise ValueError(f'{path} is {e["method"]}-compressed in the pak')
         out, left = [], e['raw']
