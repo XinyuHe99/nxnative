@@ -123,13 +123,6 @@ To enroll a cut for any game's own module:
 - **Fix:** a window never spans a second exclusive load.
 - **Found on:** [The Legend of Zelda: Tears of the Kingdom](../../dm/games/0100F2C0115B6000/README.md) 1.4.3 `main` (with [Out-of-line retry blocks of atomic updates](#out-of-line-retry-blocks-of-atomic-updates)).
 
-### Branches within an exclusive window
-
-- **Symptom:** `retry block overlaps a window <addr>`, followed by `site_window` rejecting a branch instruction inside the window.
-- **Cause:** a conditional branch can skip an instruction and jump to its own window's store-exclusive; the branch is part of that same atomic sequence, not an out-of-line retry block.
-- **Fix:** `site_window` relocates a branch whose source and target belong to the same window, including an unconditional `b`. Only a branch from outside the window goes through `retry_block`.
-- **Found on:** provisional `01001E9023920000` (`Trails in the Sky 1st Chapter`) build v393216; gameplay was not verified.
-
 ### adrp inside an exclusive window
 
 - **Symptom:** `AssertionError: 0x…` in `site_window` on an `adrp` inside an exclusive window (`ldaxr x9,[x9]; cmp x9,x25; b.ne out; adrp x10 + add x10` (the same address again, for the store); `mov x18,x26; stlxr w9,x8,[x10]`, then loads and `cbnz w9` back).

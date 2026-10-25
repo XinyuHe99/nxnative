@@ -53,38 +53,4 @@ class CopiedBase(unittest.TestCase):
         self.assertIsNone(self.follow(self.base() + [mov(7, 0)]))
 
 
-# jump_offsets with the image it reads the table from (IMG, a global of patch_nso.py)
-jscope = {'re': re, 'struct': struct}
-exec(compile(ast.Module(body=[n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in ('num', 'copied_base', 'table_base', 'check_before_copy', 'jump_offsets')], type_ignores=[]),
-             str(TOOLS / 'patch_nso.py'), 'exec'), jscope)
-
-
-class OffsetTable(unittest.TestCase):
-    """OCTOPATH TRAVELER main+0x16769f0 (UE 4.18): cmp x22,#0x10; b.hi; adrp x18 + add x18; mov x0,x18; ldrsw x18,[x0,x22,lsl #2]; add x18,x18,x0; br x18"""
-    TABLE = 0x1000
-
-    def site(self, cmp):
-        code = [cmp, 0x54000088, ADRP(18, 8, self.TABLE), ADDI(18, 18, 0), mov(0, 18),
-                0xB8A00800 | 22 << 16 | 3 << 13 | 1 << 12 | 0 << 5 | 18, 0x8B000000 | 18 << 5 | 18, 0xD61F0240] + [NOP] * 17   # the cases follow the br
-        img = bytearray(self.TABLE + 4 * 17)
-        struct.pack_into('<' + 'I' * len(code), img, 0, *code)
-        cases = [4 * (8 + i) for i in range(17)]
-        struct.pack_into('<' + 'i' * 17, img, self.TABLE, *[c - self.TABLE for c in cases])
-        md = Cs(CS_ARCH_ARM64, CS_MODE_ARM); md.detail = True
-        ins = list(md.disasm(bytes(img[:4 * len(code)]), 0))
-        self.assertEqual([i.mnemonic for i in ins[4:8]], ['mov', 'ldrsw', 'add', 'br'])
-        jscope['IMG'] = img
-        return ins, cases
-
-    def test_64_bit_check_only_in_the_last_attempt(self):
-        ins, cases = self.site(0xF10042DF)   # cmp x22, #0x10
-        self.assertIsNone(jscope['jump_offsets'](ins, 7))
-        self.assertIsNone(jscope['jump_offsets'](ins, 7, copy_first=True))
-        self.assertEqual(jscope['jump_offsets'](ins, 7, copy_first=True, far_base=True), cases)
-
-    def test_32_bit_check_unchanged(self):
-        ins, cases = self.site(0x710042DF)   # cmp w22, #0x10
-        self.assertEqual(jscope['jump_offsets'](ins, 7, copy_first=True, far_base=True), cases)
-
-
 if __name__ == '__main__': unittest.main()

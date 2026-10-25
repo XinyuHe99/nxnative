@@ -364,13 +364,12 @@ def site_window(seg):
         w = struct.unpack('<I', x.bytes)[0]
         if has18(x): w = subst(x, S)
         m = x.mnemonic
-        if m in ('b', 'cbz', 'cbnz', 'tbz', 'tbnz') or m.startswith('b.'):
+        if m in ('cbz', 'cbnz', 'tbz', 'tbnz') or m.startswith('b.'):
             tgt = x.operands[-1].imm
             if lo <= tgt < hi: newt = copy0 + (tgt - lo)
             else: ex_targets.append(tgt); newt = exits + 16 * (len(ex_targets) - 1)
             pc = copy0 + 4 * k; off = (newt - pc) >> 2
-            if m == 'b': w = B(pc, newt)
-            elif m in ('tbz', 'tbnz'): w = (w & 0xFFF8001F) | ((off & 0x3FFF) << 5)
+            if m in ('tbz', 'tbnz'): w = (w & 0xFFF8001F) | ((off & 0x3FFF) << 5)
             else: w = (w & 0xFF00001F) | ((off & 0x7FFFF) << 5)
             dd = dis(w, pc); assert dd.operands[-1].imm == newt and dd.mnemonic == m
         elif m == 'adrp': w = window_adrp(x, S, copy0 + 4 * k)
@@ -559,15 +558,13 @@ def jump_offsets(insl, j, copy_first=False, far_base=False):
         if m and m.group(1) in idx: idx.add(m.group(2)); continue
         m = re.fullmatch(r'([wx]\d+), ([wx]\d+), #(0x[0-9a-f]+|\d+)', p.op_str) if p.mnemonic == 'and' else None
         if m and wname(m.group(1)) in idx and masked is None: masked = (wname(m.group(2)), int(m.group(3), 0), i); continue
-        # The last attempt (far_base) also takes the check on the 64-bit register: OCTOPATH TRAVELER main+0x16769f0 (UE 4.18) has cmp x22,#0x10; b.hi; adrp x18 + add x18;
-        # mov x0,x18; ldrsw x18,[x0,x22,lsl #2]; add x18,x18,x0 (its base copied, copied_base below). Only that attempt, so sites the earlier forms handle are rewritten as before
-        m = re.fullmatch(r'([wx]\d+), #(0x[0-9a-f]+|\d+)' if far_base else r'(w\d+), #(0x[0-9a-f]+|\d+)', p.op_str) if p.mnemonic == 'cmp' else None
+        m = re.fullmatch(r'(w\d+), #(0x[0-9a-f]+|\d+)', p.op_str) if p.mnemonic == 'cmp' else None
         if not m: continue
-        if wname(m.group(1)) in idx: cmp = p; break
+        if m.group(1) in idx: cmp = p; break
         if masked:   # the checked register must be "the same source & the same mask", with the source unchanged up to the index's and
             for q in range(i - 1, -1, -1):
                 w = [wname(ctx[q].reg_name(r)) for r in ctx[q].regs_access()[1]]
-                if wname(m.group(1)) not in w: continue
+                if m.group(1) not in w: continue
                 mm = re.fullmatch(r'([wx]\d+), ([wx]\d+), #(0x[0-9a-f]+|\d+)', ctx[q].op_str) if ctx[q].mnemonic == 'and' else None
                 if mm and wname(mm.group(2)) == masked[0] and int(mm.group(3), 0) == masked[1] and \
                    not any(masked[0] in [wname(ctx[z].reg_name(r)) for r in ctx[z].regs_access()[1]] for z in range(q + 1, masked[2])):
@@ -808,14 +805,12 @@ for fa, fb in funcs:
             jumps[ins.address] = (base, width)
     # No jump may land in the middle of a window, except a retry block's branch onto the window's store-exclusive (retry_block), which gets a copy of its own
     inwin = {x.address for wseg in ws for x in wseg}; heads = {wseg[0].address for wseg in ws}
-    window_of = {x.address: n for n, wseg in enumerate(ws) for x in wseg}
     rmid = set()
     for k, x in enumerate(insl):
         if x.mnemonic in ('b', 'bl', 'cbz', 'cbnz', 'tbz', 'tbnz') or x.mnemonic.startswith('b.'):
             t = x.operands[-1].imm
             if t in inwin and t not in heads:
                 wseg = next(w for w in ws if any(y.address == t for y in w))
-                if window_of.get(x.address) == window_of.get(t): continue   # site_window relocates branches that stay inside this window, including a branch to its own stxr
                 rb = retry_block(insl, k, wseg) if x.mnemonic not in ('b', 'bl') else None
                 assert rb, f'branch into window {x.address:x}'
                 assert not any(y.address in done for y in rb[0]), f'retry block overlaps a window {rb[0][0].address:x}'
