@@ -8,6 +8,8 @@ void front_menu_set_perf_mode(int mode); // the performance overlay at the top l
 double front_menu_fps(void);             // frames put on screen per second, measured before the menu held the game; -1 before the first second
 bool front_menu_muted(void);
 void front_menu_set_muted(bool on);      // the real audio output off (the silent sink keeps pacing the game)
+bool front_menu_ambient(void);
+void front_menu_set_ambient(bool on);   // Ambient mode: the picture's edges extended into the bars beside it
 void front_menu_quit(void);              // the host's graceful exit (hle_lifecycle.c)
 int dm_thermal_now(void);                // 0 nominal .. 3 critical
 

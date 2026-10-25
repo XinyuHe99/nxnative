@@ -4,8 +4,8 @@
 // the dimmed picture or a swipe back to the left. A swipe that lands on a virtual-gamepad control is left to the gamepad (dm_pad_takes), so the left stick near the edge keeps working.
 // What it offers, all through DmMenu.h: resume, a screenshot (the next presented frame as PNG into Documents/Screenshots, then into Photos when allowed), shaking the controller, quitting;
 // the virtual gamepad's layout, opacity, hide switch and touch feedback; the console mode (handheld / docked, hle_oe.c pushes the change to the game), the performance overlay
-// (off, frame rate or the performance panel, DmPerfPanel.m) and sound. A console mode, performance overlay or touch feedback chosen here is also kept as the launcher's choice for the next start (Launcher.swift's "launcher.<variable>" keys), unless an env file
-// set that variable. The first few starts show a short hint at the left edge. DM_MENU=0 leaves the menu out, DM_MENU=open opens it a second after the game starts (for testing)
+// (off, frame rate or the performance panel, DmPerfPanel.m), Ambient mode (front_ios.m) and sound. A console mode, performance overlay, Ambient mode or touch feedback chosen here is also kept as the launcher's choice for the next start (Launcher.swift's "launcher.<variable>" keys), unless an env file
+// set that variable. Those four rows follow the game's own settings list (dmOfferedSettings, as the launcher shows it): a game or a device without one leaves its row out. The first few starts show a short hint at the left edge. DM_MENU=0 leaves the menu out, DM_MENU=open opens it a second after the game starts (for testing)
 import Photos
 import SwiftUI
 import UIKit
@@ -25,6 +25,7 @@ private final class MenuModel: ObservableObject {
     @Published var hidden = false
     @Published var haptics = true
     @Published var perfMode = 0   // 0 off, 1 frame rate, 2 performance panel
+    @Published var ambient = false
     @Published var pauseOnOpen = MenuModel.pauseSetting
     @Published var muted = false
     @Published var fps = -1.0
@@ -37,12 +38,14 @@ private final class MenuModel: ObservableObject {
     var close: (_ then: (() -> Void)?) -> Void = { _ in }
     var syncHold: () -> Void = {}   // MenuController: hold or release the game for the open menu and this setting
     static var pauseSetting: Bool { UserDefaults.standard.object(forKey: "DmMenuPause") as? Bool ?? true }
+    private let offered = dmOfferedSettings()
+    func offers(_ env: String) -> Bool { offered?.contains(env) ?? (env != "DM_AMBIENT" || dmLetterboxed()) }
     private var toastGen = 0
 
     func read() {
         layout = Int(dm_pad_layout()); docked = dm_opmode() != 0; controller = dm_pad_controller()
         opacity = dm_pad_opacity(); hidden = dm_pad_hidden(); haptics = dm_pad_haptics()
-        perfMode = Int(front_menu_perf_mode()); muted = front_menu_muted(); pauseOnOpen = MenuModel.pauseSetting
+        perfMode = Int(front_menu_perf_mode()); ambient = front_menu_ambient(); muted = front_menu_muted(); pauseOnOpen = MenuModel.pauseSetting
         stats()
     }
     func stats() {
@@ -75,6 +78,7 @@ private final class MenuModel: ObservableObject {
     func setHidden(_ on: Bool) { dm_pad_set_hidden(on); hidden = on }
     func setHaptics(_ on: Bool) { dm_pad_set_haptics(on); haptics = on; remember("DM_TOUCH_HAPTICS", on ? "1" : "0") }
     func setPerf(_ mode: Int) { front_menu_set_perf_mode(Int32(mode)); perfMode = mode; remember("DM_PERF_OVERLAY", String(mode)) }
+    func setAmbient(_ on: Bool) { front_menu_set_ambient(on); ambient = front_menu_ambient(); remember("DM_AMBIENT", on ? "1" : "0") }
     func setMuted(_ on: Bool) { front_menu_set_muted(on); muted = on }
     func setPause(_ on: Bool) {
         UserDefaults.standard.set(on, forKey: "DmMenuPause"); pauseOnOpen = on
@@ -263,25 +267,34 @@ private struct MenuPanel: View {
             }
         }
         .disabled(m.controller || m.hidden)
-        Row(title: "Hide touch controls") { Toggle("", isOn: Binding(get: { m.hidden }, set: { m.setHidden($0) })).labelsHidden() }.disabled(m.controller)
-        Row(title: "Touch feedback", last: true) { Toggle("", isOn: Binding(get: { m.haptics }, set: { m.setHaptics($0) })).labelsHidden() }
+        Row(title: "Hide touch controls", last: !m.offers("DM_TOUCH_HAPTICS")) { Toggle("", isOn: Binding(get: { m.hidden }, set: { m.setHidden($0) })).labelsHidden() }.disabled(m.controller)
+        if m.offers("DM_TOUCH_HAPTICS") {
+            Row(title: "Touch feedback", last: true) { Toggle("", isOn: Binding(get: { m.haptics }, set: { m.setHaptics($0) })).labelsHidden() }
+        }
     }
 
     @ViewBuilder var game: some View {
-        Row(title: "Console mode") {
-            Picker("Console mode", selection: Binding(get: { m.docked }, set: { m.setDocked($0) })) {
-                Text("Handheld").tag(false)
-                Text("Docked").tag(true)
+        if m.offers("DM_OPMODE") {
+            Row(title: "Console mode") {
+                Picker("Console mode", selection: Binding(get: { m.docked }, set: { m.setDocked($0) })) {
+                    Text("Handheld").tag(false)
+                    Text("Docked").tag(true)
+                }
+                .pickerStyle(.segmented).labelsHidden().frame(width: 160)
             }
-            .pickerStyle(.segmented).labelsHidden().frame(width: 160)
         }
-        Row(title: "Performance overlay") {
-            Picker("Performance overlay", selection: Binding(get: { m.perfMode }, set: { m.setPerf($0) })) {
-                Text("Off").tag(0)
-                Text("FPS").tag(1)
-                Text("Panel").tag(2)
+        if m.offers("DM_PERF_OVERLAY") {
+            Row(title: "Performance overlay") {
+                Picker("Performance overlay", selection: Binding(get: { m.perfMode }, set: { m.setPerf($0) })) {
+                    Text("Off").tag(0)
+                    Text("FPS").tag(1)
+                    Text("Panel").tag(2)
+                }
+                .pickerStyle(.segmented).labelsHidden().frame(width: 160)
             }
-            .pickerStyle(.segmented).labelsHidden().frame(width: 160)
+        }
+        if m.offers("DM_AMBIENT") {
+            Row(title: "Ambient mode") { Toggle("", isOn: Binding(get: { m.ambient }, set: { m.setAmbient($0) })).labelsHidden() }
         }
         Row(title: "Pause while the menu is open", last: true) { Toggle("", isOn: Binding(get: { m.pauseOnOpen }, set: { m.setPause($0) })).labelsHidden() }
     }
@@ -300,11 +313,12 @@ private struct MenuOverlay: View {
 
     var body: some View {
         GeometryReader { geo in
-            // Keep the entire panel past the hardware safe area. Half the inset lets
-            // the Dynamic Island cover rows as they scroll through the screen's centre.
+            // The panel keeps clear of the Dynamic Island and the rounded corners at the side (the whole side inset: half of it let the island cover rows as they
+            // scrolled past). Above and below it floats at one margin: in landscape only the home indicator, hidden while playing, insets the bottom, and taking that
+            // inset there left the panel three times as far from the bottom edge as from the top
             let lead = geo.safeAreaInsets.leading + 12
-            let top = geo.safeAreaInsets.top + 10
-            let bottom = geo.safeAreaInsets.bottom + 10
+            let top = geo.safeAreaInsets.top + 12
+            let bottom = top
             let shift = (1 - m.progress) * (width + lead + 24)
             ZStack(alignment: .leading) {
                 Color.black.opacity(0.45 * m.progress)

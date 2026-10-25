@@ -275,6 +275,7 @@ Notes on these steps:
 - `DM_ENV_FILE=` bakes environment switches into the app, and `DM_DISPLAY_NAME=` renames it.
 - `DM_LANG=<code>` is the game language (`DMLanguage` in `Info.plist`, default `en-US`; `main.m` sets `DM_LANG` from it unless `Documents/env.txt` or the baked env file sets it).
 - `DM_SHOW_FPS=1` turns the frame-rate counter on (`DMShowFPS` in `Info.plist`, which `front_ios.m` reads; `DM_SHOW_FPS` in `Documents/env.txt` overrides it). It counts the frames put on screen each second (`mtl_present_count`), so frames the display link merges away are not counted.
+- `DM_AMBIENT=1` turns Ambient mode on (a launcher setting, also in the in-game menu; off by default): `front_ios.m` moves the game view into a `UIBackgroundExtensionView`, which fills the bars beside the 16:9 picture with its mirrored, blurred edges. While it is off the game view sits in the root view as before. The launcher and the menu leave it out on a 16:9 screen (`dmLetterboxed` in `Launcher.swift`); the menu's game rows follow `dm/launcher.json` as the launcher does.
 - The unsigned build pins its build product and intermediate directories inside `$W/build/ios/pkg/dd`, independently of Xcode's Locations preference.
 - hactool cannot read every update (Mario 1.2.1's patch NCA gives "Invalid BKTR layout!"), which is why `nx_extract` uses LibHac.
 

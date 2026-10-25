@@ -12,6 +12,7 @@ DM_PRESENT_SNAP	toggle	-	0	gfxapi:nvn	Frame buffering	May reduce stutter; adds d
 DM_OPMODE	choice	1=Docked,0=Handheld	DM_GAME_OPMODE	always	Console mode
 DM_LANG	choice	languages	build:DM_LANG	languages>1	Game language
 DM_METAL_HUD	toggle	-	0	always	Performance HUD
+DM_AMBIENT	toggle	-	0	always	Ambient mode	Fills the bars beside the picture with its blurred edges; uses a little more power.
 DM_PERF_OVERLAY	choice	0=Off,1=FPS,2=Performance panel	build:DM_SHOW_FPS	always	Performance overlay	Off, frame rate or detailed performance panel.
 DM_TOUCH_HAPTICS	toggle	-	1	always	Touch feedback	Haptic clicks when pressing touch controls.
 DM_RUMBLE	toggle	-	1	always	Game rumble	Vibration from the game on your phone or connected controller.

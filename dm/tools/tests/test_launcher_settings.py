@@ -1,4 +1,4 @@
-"""The launcher offers frame buffering only for the graphics API selected by the packer."""
+"""The launcher offers frame buffering only for the graphics API selected by the packer, and Ambient mode (off) for every game."""
 import importlib.util
 import os
 from pathlib import Path
@@ -24,6 +24,13 @@ class LauncherSettingsTests(unittest.TestCase):
                         self.assertEqual(found[0]['kind'], 'toggle')
                         self.assertEqual(found[0]['default'], '0')
                         self.assertIn('latency', found[0]['note'])
+
+    def test_ambient_mode_for_every_game(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(settings.nacp, 'languages', return_value=['en-US']):
+            for api, gid in [('nvn', '01007EF00011E000'), ('vulkan', '0100535012974000'), ('gl', '010014E00DB56000')]:
+                with self.subTest(api=api), patch.dict(os.environ, {'GFXAPI': api}):
+                    found = [s for s in settings.build(gid, tmp, Path(tmp) / 'control.nacp')['settings'] if s['env'] == 'DM_AMBIENT']
+                    self.assertEqual([(s['kind'], s['default']) for s in found], [('toggle', '0')])
 
 
 if __name__ == '__main__':

@@ -1,4 +1,4 @@
-// iOS front end (the iOS implementation of front.h): a centered 16:9 Metal view (black bars on both sides) + a full-screen virtual gamepad layer (DmGamepad.m, controls drawn over the picture)
+// iOS front end (the iOS implementation of front.h): a centered 16:9 Metal view (black bars on both sides, or its edges extended into them in Ambient mode) + a full-screen virtual gamepad layer (DmGamepad.m, controls drawn over the picture)
 // + the in-game menu over both (GameMenu.swift: a swipe in from the left edge; it holds the game while open, front_menu_hold).
 // The host runs on the big-stack thread started by main.m; front_run runs the guest directly on the calling thread.
 #import <UIKit/UIKit.h>
@@ -45,10 +45,12 @@ static UIView *front_ios_perf_overlay(void);
 
 @interface DmRootVC : UIViewController
 @property (nonatomic, strong) DmGameView *game;
+@property (nonatomic, strong) UIBackgroundExtensionView *ambient;   // Ambient mode: holds the game view (below); nil while it is off
 @property (nonatomic, strong) UIView *pad;
 @property (nonatomic, strong) UIView *fps;
 @property (nonatomic) BOOL launched;
 - (void)startGame;
+- (void)setAmbientOn:(BOOL)on;
 @end
 static DmRootVC *g_root;
 static void launcher_done(void) { [g_root startGame]; }
@@ -74,6 +76,7 @@ static void launcher_done(void) { [g_root startGame]; }
     [self.view addSubview:self.game];
     g_layer = (CAMetalLayer *)self.game.layer;
     if (getenv("DM_METAL_HUD") && atoi(getenv("DM_METAL_HUD"))) { g_layer.developerHUDProperties = @{@"mode": @"default"}; LOG("front end: Metal performance HUD on (DM_METAL_HUD)"); }   // Apple's HUD over the game (a diagnostic switch for env files)
+    if (getenv("DM_AMBIENT") && atoi(getenv("DM_AMBIENT"))) [self setAmbientOn:YES];
     dm_haptics_apple_init();
     self.pad = dm_gamepad_view(self.view.bounds);
     self.pad.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
@@ -90,7 +93,7 @@ static void launcher_done(void) { [g_root startGame]; }
     CGRect b = self.view.bounds; if (!self.game) return;
     CGFloat w = b.size.width, h = b.size.height;   // Fit 16:9 into the whole screen
     if (w / h > 16.0 / 9.0) w = h * 16.0 / 9.0; else h = w * 9.0 / 16.0;
-    self.game.frame = CGRectMake(floor((b.size.width - w) / 2), floor((b.size.height - h) / 2), w, h);
+    self.game.frame = CGRectMake(floor((b.size.width - w) / 2), floor((b.size.height - h) / 2), w, h);   // the extension view fills the root view, so the frame is the same in it
     {   // the performance overlay: the top row's free stretch (the panel reaches down from there): right of DmGamepad.m's L3 key (102 + 17 of its units from the safe edge), level with − / + (22 units down); u is its unit
         CGRect s = UIEdgeInsetsInsetRect(b, self.view.safeAreaInsets); CGFloat u = MIN(b.size.height / 430.0, 1.3);
         CGSize fs = [self.fps sizeThatFits:CGSizeZero];
@@ -102,6 +105,27 @@ static void launcher_done(void) { [g_root startGame]; }
     if (self.launched || !front_ios_boot_ok()) return;
     self.launched = YES; g_root = self;
     if (!dm_show_launcher((__bridge void *)self, launcher_done)) [self startGame];   // the settings screen first (Launcher.swift), when the app has one
+}
+// Ambient mode (DM_AMBIENT, off by default; the launcher and the in-game menu switch it): the bars beside the 16:9 picture show its edges mirrored and blurred, UIKit's background
+// extension effect (UIBackgroundExtensionView, iOS 26: Apple's way of carrying content on under a sidebar or past the safe area). The game view moves into an extension view that
+// fills the root view and keeps its own frame (automaticallyPlacesContentView off); while off, it sits in the root view as before, with no effect to composite
+- (void)setAmbientOn:(BOOL)on {
+    if (!self.game || on == (self.ambient != nil)) return;
+    if (on) {
+        UIBackgroundExtensionView *x = [[UIBackgroundExtensionView alloc] initWithFrame:self.view.bounds];
+        x.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        x.automaticallyPlacesContentView = NO; x.backgroundColor = UIColor.blackColor;
+        [self.view insertSubview:x belowSubview:self.game];   // the game's place under the pad and the menu
+        x.contentView = self.game;
+        self.ambient = x;
+        self.game.frame = CGRectZero;   // the frame is set again below: the extension view lays out its edges only when its content changes size
+    } else {
+        self.ambient.contentView = nil;
+        [self.view insertSubview:self.game aboveSubview:self.ambient];
+        [self.ambient removeFromSuperview]; self.ambient = nil;
+    }
+    [self.view setNeedsLayout]; [self.view layoutIfNeeded];
+    LOG("front end: ambient mode %s", on ? "on" : "off");
 }
 - (BOOL)prefersHomeIndicatorAutoHidden { return YES; }
 - (UIRectEdge)preferredScreenEdgesDeferringSystemGestures { return UIRectEdgeAll; }   // Edge gestures need two swipes, to avoid accidental exits
@@ -160,7 +184,8 @@ void front_menu_set_perf_mode(int mode) {
     LOG("front end: performance overlay %s from the menu", mode == 2 ? "panel" : mode == 1 ? "frame rate" : "off");
 }
 double front_menu_fps(void) { return dm_perf_overlay_fps(g_root.fps); }
-
+bool front_menu_ambient(void) { return g_root.ambient != nil; }
+void front_menu_set_ambient(bool on) { [g_root setAmbientOn:on]; }
 
 void *front_metal_layer(void) { return (__bridge void *)g_layer; }
 void front_run(void (*guest)(void)) { guest(); }   // Already on main.m's big-stack thread

@@ -17,6 +17,8 @@
 "Game language" = "游戏语言";
 "Touch feedback" = "触控反馈";
 "Haptic clicks when pressing touch controls." = "按下虚拟按键时提供轻微振动反馈。";
+"Ambient mode" = "氛围模式";
+"Fills the bars beside the picture with its blurred edges; uses a little more power." = "用画面边缘的模糊延伸填充两侧黑边；耗电略有增加。";
 "Game rumble" = "游戏振动";
 "Vibration from the game on your phone or connected controller." = "通过手机或已连接的手柄呈现游戏振动。";
 "Rumble strength" = "振动强度";

@@ -19,6 +19,21 @@ private func info(_ key: String) -> Any? { Bundle.main.object(forInfoDictionaryK
 private func localized(_ key: String) -> String { NSLocalizedString(key, comment: "") }
 private let defaults = UserDefaults.standard
 
+// What a game offers differs (dm/games/settings.py writes each app's list), and a setting may do nothing on this device: Ambient mode only fills bars, so it is left out where
+// the screen is 16:9 itself. The launcher and the in-game menu (GameMenu.swift, dmOfferedSettings) both show only the settings that are left
+func dmLetterboxed() -> Bool {
+    let s = (UIApplication.shared.connectedScenes.first as? UIWindowScene)?.screen.bounds.size ?? .zero
+    guard s.width > 0, s.height > 0 else { return true }
+    return abs(max(s.width, s.height) / min(s.width, s.height) - 16.0 / 9.0) > 0.01
+}
+private func applies(_ s: Setting) -> Bool { s.env != "DM_AMBIENT" || dmLetterboxed() }
+private func readSettings() -> SettingsFile? {
+    guard let url = Bundle.main.resourceURL?.appendingPathComponent("dm/launcher.json"), let data = try? Data(contentsOf: url) else { return nil }
+    return try? JSONDecoder().decode(SettingsFile.self, from: data)
+}
+// The variables of the settings this app offers here; nil when it has no dm/launcher.json (then the menu offers all of its own)
+func dmOfferedSettings() -> Set<String>? { readSettings().map { Set($0.settings.filter(applies).map(\.env)) } }
+
 private final class LauncherModel: ObservableObject {
     let settings: [Setting]
     let fromFile: Set<String>   // set by an env file: shown, not changed
@@ -56,7 +71,7 @@ private final class LauncherModel: ObservableObject {
 
 // Group only the settings this screen knows about; new game/profile settings stay visible under Other.
 private let groups: [(title: String, symbol: String, envs: [String])] = [
-    ("Display", "display", ["DM_FPS_TARGET", "DM_RENDER_SCALE", "DM_PRESENT_SNAP", "DM_METAL_HUD", "DM_PERF_OVERLAY"]),
+    ("Display", "display", ["DM_FPS_TARGET", "DM_RENDER_SCALE", "DM_PRESENT_SNAP", "DM_AMBIENT", "DM_METAL_HUD", "DM_PERF_OVERLAY"]),
     ("Game", "gamecontroller", ["DM_OPMODE", "DM_LANG"]),
     ("Controls & Haptics", "hand.tap", ["DM_TOUCH_HAPTICS", "DM_RUMBLE", "DM_RUMBLE_GAIN"]),
 ]
@@ -234,6 +249,7 @@ private struct LauncherView: View {
             .contentMargins(.horizontal, 10, for: .scrollContent)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(.hidden, for: .navigationBar)
+            .containerBackground(.clear, for: .navigation)   // the backdrop shows through, as beside the panel (the stack's own fill drew a black box)
         }
     }
 
@@ -247,6 +263,7 @@ private struct LauncherView: View {
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
                     .minimumScaleFactor(0.78)
+                    .fixedSize(horizontal: false, vertical: true)   // a long name takes its second line before it shrinks or is cut
                 versionLabel
             }
             playButton
@@ -370,7 +387,7 @@ public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @c
     guard let url = Bundle.main.resourceURL?.appendingPathComponent("dm/launcher.json"), let data = try? Data(contentsOf: url) else { return false }
     guard let file = try? JSONDecoder().decode(SettingsFile.self, from: data), !file.settings.isEmpty else { fputs("[RED] launcher: dm/launcher.json cannot be read; starting the game\n", stderr); return false }
     let parent = Unmanaged<UIViewController>.fromOpaque(viewController).takeUnretainedValue()
-    let model = LauncherModel(file.settings)
+    let model = LauncherModel(file.settings.filter(applies))
     var host: UIViewController?
     let view = LauncherView(m: model) {
         guard let h = host else { return }
