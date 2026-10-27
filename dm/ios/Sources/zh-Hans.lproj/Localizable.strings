@@ -22,6 +22,8 @@
 "Game rumble" = "游戏振动";
 "Vibration from the game on your phone or connected controller." = "通过手机或已连接的手柄呈现游戏振动。";
 "Rumble strength" = "振动强度";
+"Rumble cutoff" = "振动阈值";
+"Set at launch" = "已由启动参数锁定";
 "Adjusts game rumble alongside the game's own vibration setting." = "配合游戏内的振动设置，调节振动强度。";
 "American English" = "英语（美国）";
 "British English" = "英语（英国）";

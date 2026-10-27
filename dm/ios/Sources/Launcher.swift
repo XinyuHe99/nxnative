@@ -1,8 +1,8 @@
 // Launcher: the settings screen shown before the game starts (front_ios.m dm_show_launcher). Its settings come from the app's dm/launcher.json, which build_ipa.sh writes for this game
 // from dm/games/settings.tsv (dm/games/settings.py): each sets an environment variable the host reads when the game starts. A variable an env file set (Documents/env.txt, the bundle's
 // dm/env.txt; main.m lists them in DM_ENV_FILE_KEYS) is shown but kept. All settings share one screen, grouped by section, beside the game's icon, name and Play over a blurred
-// backdrop of the icon. The model (LauncherSettings.swift): choices that differ from the game's default are kept in UserDefaults; Reset to tested defaults forgets them.
-// DM_LAUNCHER=0 in Documents/env.txt starts the game at once, as an app without launcher.json does
+// backdrop of the icon (rows: LauncherRow.swift). The model (LauncherSettings.swift): choices that differ from the game's default are kept in UserDefaults; Reset to tested defaults
+// forgets them. DM_LAUNCHER=0 in Documents/env.txt starts the game at once with the saved choices; DM_SAVED_CHOICES=0 ignores them (and keeps them)
 import SwiftUI
 import UIKit
 import os
@@ -25,67 +25,9 @@ private func readSettings() -> SettingsFile? {
 // The variables of the settings this app offers here; nil when it has no dm/launcher.json (then the menu offers all of its own)
 func dmOfferedSettings() -> Set<String>? { readSettings().map { Set($0.settings.filter(applies).map(\.env)) } }
 
-private extension LauncherModel {
-    func binding(_ s: Setting) -> Binding<String> { Binding(get: { self.values[s.env] ?? s.def }, set: { self.values[s.env] = $0 }) }
-}
-
 // The symbol beside each section's heading (settings.py's sections)
 private func sectionSymbol(_ section: String) -> String {
     switch section { case "Controls": return "hand.tap"; case "Performance": return "speedometer"; default: return "gamecontroller" }
-}
-
-private struct SettingRow: View {
-    let s: Setting
-    @ObservedObject var m: LauncherModel
-
-    private var locked: Bool { m.fromFile.contains(s.env) }
-    private var note: String {
-        let n = localized(s.note)
-        return locked ? (n.isEmpty ? "" : n + " · ") + localized("Set by an env file") : n
-    }
-    private var rangeValue: Binding<Double> {
-        Binding(get: { Double(m.values[s.env] ?? s.def) ?? s.max ?? 1 },
-                set: { m.values[s.env] = String(format: "%.2f", $0) })
-    }
-    private var percentage: String { "\(Int((rangeValue.wrappedValue * 100).rounded())) %" }
-
-    private var settingLabel: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(localized(s.label))
-            if !note.isEmpty { Text(note).font(.footnote).foregroundStyle(.secondary) }
-        }
-    }
-
-    var body: some View {
-        Group {
-            switch s.kind {
-            case "choice":
-                Picker(selection: m.binding(s)) {
-                    ForEach(s.options ?? [], id: \.[0]) { Text(localized($0[1])).tag($0[0]) }
-                } label: {
-                    settingLabel
-                }
-                .pickerStyle(.menu)
-            case "range":
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        settingLabel
-                        Spacer()
-                        Text(percentage).monospacedDigit().foregroundStyle(.secondary)
-                    }
-                    Slider(value: rangeValue, in: (s.min ?? 0)...(s.max ?? 1), step: s.step ?? 0.05)
-                        .accessibilityLabel(localized(s.label))
-                        .accessibilityValue(percentage)
-                }
-            default:
-                Toggle(isOn: Binding(get: { (m.values[s.env] ?? s.def) == s.onValue }, set: { m.values[s.env] = $0 ? s.onValue : s.offValue })) {
-                    settingLabel
-                }
-            }
-        }
-        .disabled(locked)
-        .listRowBackground(Color.white.opacity(0.08))
-    }
 }
 
 private struct LauncherView: View {
@@ -146,10 +88,13 @@ private struct LauncherView: View {
     private func settingsPanel() -> some View {
         Form {
             ForEach(m.sections, id: \.self) { section in
-                Section {
-                    ForEach(m.settings.filter { $0.sectionTitle == section }) { SettingRow(s: $0, m: m) }
-                } header: {
-                    Label(LocalizedStringKey(section), systemImage: sectionSymbol(section))
+                let rows = m.rows(in: section)   // a sub-setting only while it can do anything (LauncherModel.visible)
+                if !rows.isEmpty {
+                    Section {
+                        ForEach(rows) { SettingRow(s: $0, m: m).listRowBackground(Color.white.opacity(0.08)) }
+                    } header: {
+                        Label(LocalizedStringKey(section), systemImage: sectionSymbol(section))
+                    }
                 }
             }
 
@@ -311,9 +256,9 @@ private struct LauncherView: View {
 // Shows the launcher over the root view controller and calls done once the settings are in the environment; false (done is not called) when there is no launcher
 @_cdecl("dm_show_launcher")
 public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @convention(c) () -> Void) -> Bool {
-    if ProcessInfo.processInfo.environment["DM_LAUNCHER"] == "0" { fputs("launcher: off (DM_LAUNCHER=0)\n", stderr); return false }
     guard let url = Bundle.main.resourceURL?.appendingPathComponent("dm/launcher.json"), let data = try? Data(contentsOf: url) else { return false }
     guard let file = try? JSONDecoder().decode(SettingsFile.self, from: data), !file.settings.isEmpty else { fputs("[RED] launcher: dm/launcher.json cannot be read; starting the game\n", stderr); return false }
+    if ProcessInfo.processInfo.environment["DM_LAUNCHER"] == "0" { fputs("launcher: off (DM_LAUNCHER=0)\n", stderr); LauncherModel(file.settings.filter(applies)).applySaved(); return false }
     let parent = Unmanaged<UIViewController>.fromOpaque(viewController).takeUnretainedValue()
     let model = LauncherModel(file.settings.filter(applies))
     var host: UIViewController?
