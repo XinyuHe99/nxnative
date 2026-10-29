@@ -13,7 +13,7 @@
 //   The virtual gamepad hides while a physical controller is connected and comes back when it is removed; meanwhile every touch goes to the game. Physical controllers keep every button (D-pad and right stick included) and map by position: bottom = B, right = A, left = Y, top = X (same positions as on a Switch controller).
 //   Each physical controller is a player of its own (local co-op), as on the Mac: the first one connected is player 1, together with the touch gamepad, the next player 2, and so on up to 8; see "Physical controllers" below.
 //   Shaking the phone shakes the controller (DM_BTN_SHAKE: its six-axis sensor, hle_hid.c), whichever controls are in use; see "Shaking the phone" below.
-//   The in-game menu (GameMenu.swift) sets the layout, the controls' opacity, hides them (every touch then goes to the game) and turns the touch feedback on and off; the dm_pad_* functions at the end.
+//   The in-game menu (GameMenu.swift) sets the layout and turns the touch feedback (the launcher's DM_TOUCH_HAPTICS) on and off; the dm_pad_* functions at the end.
 #import <UIKit/UIKit.h>
 #import <GameController/GameController.h>
 #import <CoreMotion/CoreMotion.h>
@@ -126,12 +126,11 @@ static const CGFloat
     K_CLICK_X = 102, K_CLICK_R = 17;                // L3 / R3: centre from the outer edge (level with ZL / ZR), radius
 static const int k_btns[] = {B_ZL, B_L, B_ZR, B_R, B_MINUS, B_PLUS, B_LS, B_RS};   // keys locked at touch-down (L3 / R3 only in the 3D layout)
 static NSString *const k_layout_key = @"DmPadLayout";   // NSUserDefaults: 0 = 2D, 1 = 3D, 2 = Tap (DM_GAME_PAD_LAYOUT's numbers)
-static NSString *const k_opacity_key = @"DmPadOpacity", *const k_hidden_key = @"DmPadHidden";   // NSUserDefaults: the menu's opacity (0.2 .. 1, 0.5 when unset) and hide switch
 int dm_opmode(void);   // hle_oe.c: 0 = handheld
 
 @interface DmGamepad : UIView
 @property (nonatomic, readonly) BOOL padOff;
-@property (nonatomic) BOOL userOff, haptics;
+@property (nonatomic) BOOL haptics;
 @end
 static __weak DmGamepad *g_view;
 static void pads_start(void);   // Physical controllers, below
@@ -150,17 +149,10 @@ static void pads_start(void);   // Physical controllers, below
     BOOL _full, _tap;                              // the 3D layout / the Tap layout is current
     CALayer *_controls;                            // holds every control layer: hidden while a physical controller is connected (the view itself stays, for game touches)
     BOOL _padOff;                                  // a physical controller is connected: every touch goes to the game
-    BOOL _userOff;                                 // the menu hid the controls: likewise
     UITouch *_game[16];                            // touches on the game's touch screen by finger slot
 }
 
 static UIColor *k_idle, *k_on, *k_line, *k_ringFill, *k_text, *k_textOn;
-static double g_opacity = 0.5;
-static void pad_colors(void) {   // each colour carries its own low opacity instead of lowering the whole view's alpha (that would add an off-screen pass for the full-screen layer); the defaults at opacity 0.5
-    CGFloat f = g_opacity / 0.5;
-    k_idle = [UIColor colorWithWhite:1 alpha:fmin(0.14 * f, 0.5)]; k_on = [UIColor colorWithWhite:1 alpha:fmin(0.45 * f, 0.92)]; k_line = [UIColor colorWithWhite:1 alpha:fmin(0.38 * f, 0.85)];
-    k_ringFill = [UIColor colorWithWhite:1 alpha:fmin(0.06 * f, 0.22)]; k_text = [UIColor colorWithWhite:1 alpha:fmin(0.6 * f, 1)]; k_textOn = [UIColor colorWithWhite:0 alpha:0.7];
-}
 static CAShapeLayer *shape(CALayer *parent) {
     CAShapeLayer *l = [CAShapeLayer layer];
     l.fillColor = k_idle.CGColor; l.strokeColor = k_line.CGColor; l.lineWidth = 1.5;
@@ -183,10 +175,12 @@ static BOOL fullOnly(int b) { return b == B_LS || b == B_RS || b >= B_LEFT; }   
             [_touchFeedback prepare];
         }
         _owner = [NSMapTable strongToStrongObjectsMapTable]; _faceOf = [NSMapTable strongToStrongObjectsMapTable];
-        NSNumber *op = [NSUserDefaults.standardUserDefaults objectForKey:k_opacity_key];
-        if (op) g_opacity = fmin(fmax(op.doubleValue, 0.2), 1);
-        pad_colors();
-        _userOff = [NSUserDefaults.standardUserDefaults boolForKey:k_hidden_key];
+        static dispatch_once_t once;
+        dispatch_once(&once, ^{
+            // each colour carries its own low opacity instead of lowering the whole view's alpha (that would add an off-screen pass for the full-screen layer)
+            k_idle = [UIColor colorWithWhite:1 alpha:0.14]; k_on = [UIColor colorWithWhite:1 alpha:0.45]; k_line = [UIColor colorWithWhite:1 alpha:0.38];
+            k_ringFill = [UIColor colorWithWhite:1 alpha:0.06]; k_text = [UIColor colorWithWhite:1 alpha:0.6]; k_textOn = [UIColor colorWithWhite:0 alpha:0.7];
+        });
         _controls = [CALayer layer]; [self.layer addSublayer:_controls];
         _ring = shape(_controls); _ring.fillColor = k_ringFill.CGColor;
         _knob = shape(_controls);
@@ -337,7 +331,7 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
 - (void)touchesBegan:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e {
     BOOL game = NO;
     for (UITouch *t in ts) {
-        if (self.touchesGame) { game |= [self gameBegin:t]; continue; }
+        if (_padOff) { game |= [self gameBegin:t]; continue; }
         CGPoint p = [t locationInView:self]; int hit = _tap ? -1 : [self btnAt:p];
         if (hit >= 0) { [_owner setObject:@(C_BTN | (uint64_t)hit << 8) forKey:t]; continue; }
         if (_tap) { game |= [self gameBegin:t]; continue; }
@@ -441,30 +435,14 @@ static void placeLabel(CATextLayer *t, CGPoint c, CGFloat fs) {
     [self refresh];
 }
 - (void)safeAreaInsetsDidChange { [super safeAreaInsetsDidChange]; [self setNeedsLayout]; }
-- (void)applyColors {   // after an opacity change: every stroke, the ring, then the fills
-    [CATransaction begin]; [CATransaction setDisableActions:YES];
-    for (CAShapeLayer *l in _controls.sublayers) if ([l isKindOfClass:CAShapeLayer.class]) l.strokeColor = k_line.CGColor;
-    ((CAShapeLayer *)_knob.sublayers.firstObject).strokeColor = k_line.CGColor; _ring.fillColor = k_ringFill.CGColor;
-    [CATransaction commit];
-    [self refresh];
-}
-- (void)applyShown { _controls.hidden = _padOff || _userOff; }
-- (BOOL)touchesGame { return _padOff || _userOff; }
 - (BOOL)padOff { return _padOff; }
-- (BOOL)userOff { return _userOff; }
-- (void)setUserOff:(BOOL)on {
-    if (_userOff == on) return;
-    [self reset]; _userOff = on; [self applyShown];
-    [NSUserDefaults.standardUserDefaults setBool:on forKey:k_hidden_key];
-    LOG("front end: virtual gamepad %s from the menu", on ? "hidden" : "shown");
-}
 - (BOOL)haptics { return _touchFeedback != nil; }
 - (void)setHaptics:(BOOL)on {
     if (on && !_touchFeedback) { _touchFeedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight]; [_touchFeedback prepare]; }
     if (!on) _touchFeedback = nil;
 }
 - (BOOL)takes:(CGPoint)p {   // a touch-down at p would take a control (the same order as touchesBegan; the right-stick area does not count, it starts wherever the touch lands)
-    if (self.touchesGame || _tap) return NO;
+    if (_padOff || _tap) return NO;
     if ([self btnAt:p] >= 0) return YES;
     if (dist(p, self.faceCenter) <= self.faceGap + self.faceR * 1.6) return YES;
     if (_full && dist(p, self.dpadCenter) <= self.dpadR * K_DPAD_GRAB) return YES;
@@ -550,7 +528,7 @@ static BOOL pads_slotted(GCController *gone) {
     GCController *c = note.object, *gone = [note.name isEqual:GCControllerDidDisconnectNotification] ? c : nil;
     if (c && (!c.extendedGamepad || g_merge)) LOG("controller %s: %s%s", gone ? "disconnected" : "connected", pad_name(c), c.extendedGamepad ? "" : " (no extended gamepad profile: not used)");
     BOOL any = g_merge ? pads_merged(gone) : pads_slotted(gone);
-    dispatch_async(dispatch_get_main_queue(), ^{ self->_padOff = any; [self applyShown]; [self reset]; });   // the touch gamepad hides while any controller is in use
+    dispatch_async(dispatch_get_main_queue(), ^{ self->_padOff = any; self->_controls.hidden = any; [self reset]; });   // the touch gamepad hides while any controller is in use
 }
 @end
 
@@ -566,14 +544,6 @@ void dm_gamepad_reset(void) {   // On resign active: release everything (a key h
 // ---- The in-game menu (GameMenu.swift through DmMenu.h); main thread ----
 int dm_pad_layout(void) { return g_view ? [g_view layout] : 0; }
 void dm_pad_set_layout(int l) { [g_view setLayout:l]; }
-double dm_pad_opacity(void) { return g_opacity; }
-void dm_pad_set_opacity(double a) {
-    g_opacity = fmin(fmax(a, 0.2), 1); pad_colors();
-    [NSUserDefaults.standardUserDefaults setDouble:g_opacity forKey:k_opacity_key];
-    [g_view applyColors];
-}
-bool dm_pad_hidden(void) { return g_view.userOff; }
-void dm_pad_set_hidden(bool on) { g_view.userOff = on; }
 bool dm_pad_haptics(void) { return g_view.haptics; }
 void dm_pad_set_haptics(bool on) { g_view.haptics = on; }
 bool dm_pad_controller(void) { return g_view.padOff; }

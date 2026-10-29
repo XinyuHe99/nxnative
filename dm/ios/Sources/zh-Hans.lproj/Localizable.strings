@@ -49,9 +49,6 @@
 "Saving failed (errno %d); progress was not saved." = "存档失败（错误码 %d），进度未能保存。";
 "Game files not found.\nPut the RomFS folder into this App's Documents as \"romfs\" (Files app), then restart." = "未找到游戏文件。\n请通过“文件”应用，将 RomFS 文件夹以“romfs”为名放入本应用的文稿目录，然后重新启动应用。";
 
-/* Launcher */
-"In game, swipe in from the left edge for the menu" = "游戏中从左边缘右滑打开菜单";
-
 /* In-game menu (GameMenu.swift) */
 "Swipe in from the left edge for the menu" = "从左边缘向右滑动打开菜单";
 "Close" = "关闭";
@@ -63,16 +60,11 @@
 "Serious" = "过热";
 "Critical" = "严重过热";
 "Battery" = "电量";
-"Resume" = "继续游戏";
 "Screenshot" = "截图";
 "Shake" = "摇晃手柄";
 "Mute" = "静音";
 "Unmute" = "取消静音";
-"Controls" = "虚拟手柄";
 "Layout" = "布局";
-"Opacity" = "不透明度";
-"Hide touch controls" = "隐藏按键";
-"Quit Game" = "退出游戏";
 "Quit the game?" = "要退出游戏吗？";
 "Quit" = "退出";
 "Progress since your last save will be lost." = "上次存档之后的进度将会丢失。";

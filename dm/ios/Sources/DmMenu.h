@@ -13,12 +13,8 @@ int dm_thermal_now(void);                // 0 nominal .. 3 critical
 // DmGamepad.m: the virtual gamepad
 int dm_pad_layout(void);                 // 0 = 2D, 1 = 3D, 2 = Tap
 void dm_pad_set_layout(int l);           // Tap only in handheld mode
-double dm_pad_opacity(void);
-void dm_pad_set_opacity(double a);       // 0.2 .. 1; 0.5 is the default look
-bool dm_pad_hidden(void);
-void dm_pad_set_hidden(bool on);         // hidden: every touch goes to the game, as with a physical controller connected
 bool dm_pad_haptics(void);
-void dm_pad_set_haptics(bool on);
+void dm_pad_set_haptics(bool on);       // the launcher's Touch feedback (DM_TOUCH_HAPTICS), from now on
 bool dm_pad_controller(void);            // a physical controller is connected (the virtual gamepad is hidden meanwhile)
 void dm_pad_shake(double seconds);       // shake the controller for this long (the six-axis sensor, as shaking the phone)
 bool dm_pad_takes(double x, double y);   // a touch landing there (root view points) would take a control: the edge swipe leaves it to the gamepad

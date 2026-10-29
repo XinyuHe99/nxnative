@@ -1,9 +1,9 @@
 // In-game menu: a swipe in from the left edge of the screen opens a panel over the game (front_ios.m installs it over the root view once the game starts). The panel follows the finger and
 // opens past 35 % of its width or on a quick flick. The game keeps running under it; it closes from Continue, the close button, a tap on
 // the dimmed picture or a swipe back to the left. A swipe that lands on a virtual-gamepad control is left to the gamepad (dm_pad_takes), so the left stick near the edge keeps working.
-// What it offers, all through DmMenu.h: resume, a screenshot (the next presented frame as PNG into Documents/Screenshots, then into Photos when allowed), shaking the controller, quitting;
-// the virtual gamepad's layout, opacity, hide switch and touch feedback; the console mode (handheld / docked, hle_oe.c pushes the change to the game), Ambient mode (front_ios.m)
-// and sound. A console mode, Ambient mode or touch feedback chosen here is also kept as the launcher's choice for the next start (Launcher.swift's "launcher.<variable>" keys), unless an env file
+// What it offers, all through DmMenu.h: the frame rate, free memory, thermal state and battery; resume, a screenshot (the next presented frame as PNG into Documents/Screenshots, then
+// into Photos when allowed), shaking the controller, sound, quitting; the console mode (handheld / docked, hle_oe.c pushes the change to the game) and Ambient mode (front_ios.m); the
+// virtual gamepad's layout (DmGamepad.m has no on-screen layout button) and touch feedback. Of the virtual gamepad only what the launcher also sets, and the layout, is here. A console mode, Ambient mode or touch feedback chosen here is also kept as the launcher's choice for the next start (Launcher.swift's "launcher.<variable>" keys), unless an env file
 // set that variable. Those three rows follow the game's own settings list (dmOfferedSettings, as the launcher shows it): a game or a device without one leaves its row out. The first few starts show a short hint at the left edge. DM_MENU=0 leaves the menu out, DM_MENU=open opens it a second after the game starts (for testing)
 import Photos
 import SwiftUI
@@ -19,8 +19,6 @@ private final class MenuModel: ObservableObject {
     @Published var layout = 0
     @Published var docked = false
     @Published var controller = false
-    @Published var opacity = 0.5
-    @Published var hidden = false
     @Published var haptics = true
     @Published var ambient = false
     @Published var muted = false
@@ -39,7 +37,7 @@ private final class MenuModel: ObservableObject {
 
     func read() {
         layout = Int(dm_pad_layout()); docked = dm_opmode() != 0; controller = dm_pad_controller()
-        opacity = dm_pad_opacity(); hidden = dm_pad_hidden(); haptics = dm_pad_haptics()
+        haptics = dm_pad_haptics()
         ambient = front_menu_ambient(); muted = front_menu_muted()
         fps = -1; frames0 = UInt64(mtl_present_count()); time0 = CACurrentMediaTime()
         stats()
@@ -72,8 +70,6 @@ private final class MenuModel: ObservableObject {
         if on && layout == 2 { setLayout(0) }   // Tap is offered in handheld mode only
         remember("DM_OPMODE", on ? "1" : "0"); note("console mode \(on ? "docked" : "handheld")")
     }
-    func setOpacity(_ a: Double) { dm_pad_set_opacity(a); opacity = dm_pad_opacity() }
-    func setHidden(_ on: Bool) { dm_pad_set_hidden(on); hidden = on }
     func setHaptics(_ on: Bool) { dm_pad_set_haptics(on); haptics = on; remember("DM_TOUCH_HAPTICS", on ? "1" : "0") }
     func setAmbient(_ on: Bool) { front_menu_set_ambient(on); ambient = front_menu_ambient(); remember("DM_AMBIENT", on ? "1" : "0") }
     func setMuted(_ on: Bool) { front_menu_set_muted(on); muted = on }
@@ -112,72 +108,70 @@ private final class MenuModel: ObservableObject {
 }
 
 // ---- The menu's look ----
-private struct Card<Content: View>: View {
-    let title: LocalizedStringKey
-    var tag: LocalizedStringKey? = nil   // a short state beside the title
-    @ViewBuilder let content: Content
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Text(title).font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
-                if let tag {
-                    Label(tag, systemImage: "gamecontroller.fill").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-                        .padding(.horizontal, 7).padding(.vertical, 2).background(.white.opacity(0.1), in: Capsule())
-                }
-            }
-            .padding(.leading, 4)
-            VStack(spacing: 0) { content }
-                .padding(.horizontal, 12).padding(.vertical, 4)
-                .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        }
-    }
-}
+// A sidebar sized for a phone held sideways: the header, one line of readings, one row of actions and the settings in short cards, which together fit the height of a landscape
+// iPhone without scrolling (it scrolls on a shorter screen). Settings rows are drawn as in Settings: a coloured symbol, the name, the control.
 
-// One setting: its name on the left, the control on the right, a hairline under every row but the card's last
-private struct Row<Control: View>: View {
-    let title: LocalizedStringKey
-    var last = false
-    @ViewBuilder let control: Control
-    var body: some View {
-        HStack(spacing: 10) {
-            Text(title).font(.subheadline).lineLimit(1).layoutPriority(1)
-            Spacer(minLength: 6)
-            control
-        }
-        .frame(minHeight: 40)
-        .overlay(alignment: .bottom) { if !last { Rectangle().fill(.white.opacity(0.08)).frame(height: 0.5) } }
-    }
-}
-
-private struct Stat: View {
+// One reading in the status line: a symbol and a value
+private struct Reading: View {
     let symbol: String, value: String, label: LocalizedStringKey
-    var tint: Color = .primary
+    var tint: Color = .secondary
     var body: some View {
-        VStack(spacing: 3) {
-            Image(systemName: symbol).font(.footnote.weight(.semibold)).foregroundStyle(tint)
-            Text(value).font(.subheadline.weight(.semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
-            Text(label).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+        HStack(spacing: 4) {
+            Image(systemName: symbol).font(.caption.weight(.semibold)).foregroundStyle(tint)
+            Text(value).font(.footnote.weight(.semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.75)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 10)
-        .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .accessibilityElement(children: .combine).accessibilityLabel(Text(label))
     }
 }
 
 private struct Action: View {
     let symbol: String, title: LocalizedStringKey
-    var primary = false
+    var tint: Color? = nil
     let run: () -> Void
     var body: some View {
         Button(action: run) {
-            VStack(spacing: 6) {
-                Image(systemName: symbol).font(.title3)
-                Text(title).font(.caption.weight(.medium)).lineLimit(1).minimumScaleFactor(0.8)
+            VStack(spacing: 5) {
+                Image(systemName: symbol).font(.system(size: 17, weight: .semibold)).frame(height: 20)
+                Text(title).font(.caption2.weight(.medium)).lineLimit(1).minimumScaleFactor(0.7)
             }
+            .foregroundStyle(tint ?? .primary)
             .frame(maxWidth: .infinity, minHeight: 50)
+            .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
-        .buttonStyle(.glass)
-        .tint(primary ? .accentColor : nil)
+        .buttonStyle(Pressed())
+    }
+}
+private struct Pressed: ButtonStyle {   // the action tiles dim while held
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.opacity(configuration.isPressed ? 0.55 : 1).scaleEffect(configuration.isPressed ? 0.96 : 1).animation(.snappy(duration: 0.15), value: configuration.isPressed)
+    }
+}
+
+// A card of settings rows, a hairline between rows (inset past the symbol, as in Settings)
+private struct Card<Content: View>: View {
+    @ViewBuilder let content: Content
+    var body: some View {
+        VStack(spacing: 0) { content }
+            .padding(.horizontal, 12)
+            .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+}
+private struct Row<Control: View>: View {
+    let symbol: String, tint: Color, title: LocalizedStringKey
+    var last = false
+    @ViewBuilder let control: Control
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: symbol).font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
+                .frame(width: 26, height: 26).background(tint.gradient, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            Text(title).font(.subheadline).lineLimit(1).minimumScaleFactor(0.85).layoutPriority(1)
+            Spacer(minLength: 6)
+            control
+        }
+        .frame(minHeight: 44)
+        .overlay(alignment: .bottom) { if !last { Rectangle().fill(.white.opacity(0.08)).frame(height: 0.5).padding(.leading, 36) } }
     }
 }
 
@@ -186,20 +180,17 @@ private struct MenuPanel: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 12) {
                 header
-                stats
+                readings
                 actions
-                if m.offers("DM_OPMODE") || m.offers("DM_AMBIENT") { Card(title: "Game") { game } }   // a game with neither row has no Game card
-                Card(title: "Controls", tag: m.controller ? "Controller connected" : nil) { controls }
-                Button(role: .destructive) { m.confirmQuit = true } label: {
-                    Label("Quit Game", systemImage: "power").font(.body.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 30)
-                }
-                .buttonStyle(.glass).tint(.red)
+                if m.offers("DM_OPMODE") || m.offers("DM_AMBIENT") { Card { game } }   // a game with neither row has no game card
+                Card { controls }
             }
-            .padding(16)
+            .padding(14)
         }
         .scrollIndicators(.hidden)
+        .scrollBounceBehavior(.basedOnSize)
         .alert("Quit the game?", isPresented: $m.confirmQuit) {
             Button("Quit", role: .destructive) { note("quit"); front_menu_quit() }
             Button("Cancel", role: .cancel) {}
@@ -207,73 +198,88 @@ private struct MenuPanel: View {
     }
 
     var header: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
             if let icon = appIcon() {
-                Image(uiImage: icon).resizable().frame(width: 44, height: 44).clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                Image(uiImage: icon).resizable().frame(width: 40, height: 40)
+                    .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                    .overlay { RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(.white.opacity(0.15), lineWidth: 0.5) }
             }
-            Text((info("CFBundleDisplayName") as? String) ?? tr("Game")).font(.headline).lineLimit(2)
-            Spacer(minLength: 8)
-            Button { m.close(nil) } label: { Image(systemName: "xmark").font(.body.weight(.semibold)).frame(width: 30, height: 30) }
-                .buttonStyle(.glass).buttonBorderShape(.circle).accessibilityLabel(Text("Close"))
+            VStack(alignment: .leading, spacing: 1) {
+                Text((info("CFBundleDisplayName") as? String) ?? tr("Game")).font(.headline).lineLimit(1).minimumScaleFactor(0.7)
+                Text("Version \((info("CFBundleShortVersionString") as? String) ?? "")").font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 6)
+            Button { m.close(nil) } label: {
+                Image(systemName: "xmark").font(.system(size: 13, weight: .bold)).foregroundStyle(.secondary)
+                    .frame(width: 30, height: 30).background(.white.opacity(0.1), in: Circle())
+            }
+            .buttonStyle(Pressed()).accessibilityLabel(Text("Close"))
         }
     }
 
-    var stats: some View {
-        HStack(spacing: 8) {
-            Stat(symbol: "speedometer", value: m.fps < 0 ? "--" : String(format: "%.0f", m.fps), label: "FPS")
-            Stat(symbol: "memorychip", value: m.memory == 0 ? "—" : ByteCountFormatter.string(fromByteCount: Int64(m.memory), countStyle: .memory), label: "Memory free")   // 0: no limit to measure against (the simulator)
-            Stat(symbol: "thermometer.medium", value: tr(["Normal", "Fair", "Serious", "Critical"][min(max(m.thermal, 0), 3)]), label: "Thermal",
-                 tint: [Color.green, .yellow, .orange, .red][min(max(m.thermal, 0), 3)])
+    var readings: some View {
+        let t = min(max(m.thermal, 0), 3)
+        return HStack(spacing: 0) {
+            Reading(symbol: "speedometer", value: m.fps < 0 ? "-- FPS" : String(format: "%.0f FPS", m.fps), label: "FPS")
+            divider
+            Reading(symbol: "memorychip", value: m.memory == 0 ? "—" : ByteCountFormatter.string(fromByteCount: Int64(m.memory), countStyle: .memory), label: "Memory free")   // 0: no limit to measure against (the simulator)
+            divider
+            Reading(symbol: "thermometer.medium", value: tr(["Normal", "Fair", "Serious", "Critical"][t]), label: "Thermal", tint: [Color.green, .yellow, .orange, .red][t])
             if m.battery >= 0 {
-                Stat(symbol: m.battery > 0.2 ? "battery.75percent" : "battery.25percent", value: "\(Int((m.battery * 100).rounded()))%", label: "Battery",
-                     tint: m.battery > 0.2 ? .primary : .red)
+                divider
+                Reading(symbol: m.battery > 0.2 ? "battery.75percent" : "battery.25percent", value: "\(Int((m.battery * 100).rounded()))%", label: "Battery", tint: m.battery > 0.2 ? .secondary : .red)
+            }
+            if m.controller {
+                divider
+                Reading(symbol: "gamecontroller.fill", value: "", label: "Controller connected", tint: .accentColor).frame(maxWidth: 30)
             }
         }
+        .frame(height: 32)
+        .background(.white.opacity(0.06), in: Capsule())
     }
+    private var divider: some View { Rectangle().fill(.white.opacity(0.12)).frame(width: 0.5, height: 14) }
 
     var actions: some View {
-        HStack(spacing: 8) {
-            Action(symbol: "play.fill", title: "Continue", primary: true) { m.close(nil) }
+        HStack(spacing: 6) {
+            Action(symbol: "play.fill", title: "Continue", tint: .accentColor) { m.close(nil) }
             Action(symbol: "camera.viewfinder", title: "Screenshot") { m.screenshot() }
             Action(symbol: "iphone.radiowaves.left.and.right", title: "Shake") { m.shake() }
             Action(symbol: m.muted ? "speaker.slash.fill" : "speaker.wave.2.fill", title: m.muted ? LocalizedStringKey("Unmute") : LocalizedStringKey("Mute")) { m.setMuted(!m.muted) }
-        }
-    }
-
-    @ViewBuilder var controls: some View {
-        Group {
-            Row(title: "Layout") {
-                Picker("Layout", selection: Binding(get: { m.layout }, set: { m.setLayout($0) })) {
-                    Text("2D").tag(0)
-                    Text("3D").tag(1)
-                    if !m.docked { Text("Tap").tag(2) }
-                }
-                .pickerStyle(.segmented).labelsHidden().frame(width: m.docked ? 110 : 160)
-            }
-            Row(title: "Opacity") {
-                Slider(value: Binding(get: { m.opacity }, set: { m.setOpacity($0) }), in: 0.2...1, step: 0.05).frame(width: 120)
-                Text("\(Int((m.opacity * 100).rounded()))%").font(.footnote).monospacedDigit().foregroundStyle(.secondary).frame(width: 34, alignment: .trailing)
-            }
-        }
-        .disabled(m.controller || m.hidden)
-        Row(title: "Hide touch controls", last: !m.offers("DM_TOUCH_HAPTICS")) { Toggle("", isOn: Binding(get: { m.hidden }, set: { m.setHidden($0) })).labelsHidden() }.disabled(m.controller)
-        if m.offers("DM_TOUCH_HAPTICS") {
-            Row(title: "Touch feedback", last: true) { Toggle("", isOn: Binding(get: { m.haptics }, set: { m.setHaptics($0) })).labelsHidden() }
+            Action(symbol: "power", title: "Quit", tint: .red) { m.confirmQuit = true }
         }
     }
 
     @ViewBuilder var game: some View {
         if m.offers("DM_OPMODE") {
-            Row(title: "Console mode", last: !m.offers("DM_AMBIENT")) {
+            Row(symbol: "tv", tint: .blue, title: "Console mode", last: !m.offers("DM_AMBIENT")) {
                 Picker("Console mode", selection: Binding(get: { m.docked }, set: { m.setDocked($0) })) {
                     Text("Handheld").tag(false)
                     Text("Docked").tag(true)
                 }
-                .pickerStyle(.segmented).labelsHidden().frame(width: 160)
+                .pickerStyle(.segmented).labelsHidden().frame(maxWidth: 170)
             }
         }
         if m.offers("DM_AMBIENT") {
-            Row(title: "Ambient mode", last: true) { Toggle("", isOn: Binding(get: { m.ambient }, set: { m.setAmbient($0) })).labelsHidden() }
+            Row(symbol: "rectangle.inset.filled", tint: .purple, title: "Ambient mode", last: true) {
+                Toggle("", isOn: Binding(get: { m.ambient }, set: { m.setAmbient($0) })).labelsHidden()
+            }
+        }
+    }
+
+    @ViewBuilder var controls: some View {
+        Row(symbol: "dpad.fill", tint: .orange, title: "Layout", last: !m.offers("DM_TOUCH_HAPTICS")) {
+            Picker("Layout", selection: Binding(get: { m.layout }, set: { m.setLayout($0) })) {
+                Text("2D").tag(0)
+                Text("3D").tag(1)
+                if !m.docked { Text("Tap").tag(2) }
+            }
+            .pickerStyle(.segmented).labelsHidden().frame(maxWidth: m.docked ? 120 : 170)
+        }
+        .disabled(m.controller)   // the touch gamepad is hidden while a controller is connected
+        if m.offers("DM_TOUCH_HAPTICS") {
+            Row(symbol: "hand.tap.fill", tint: .pink, title: "Touch feedback", last: true) {
+                Toggle("", isOn: Binding(get: { m.haptics }, set: { m.setHaptics($0) })).labelsHidden()
+            }
         }
     }
 
@@ -341,7 +347,7 @@ private struct MenuOverlay: View {
 
 // ---- The edge swipe and the panel over the root view ----
 private final class MenuController: NSObject, UIGestureRecognizerDelegate {
-    static let width: CGFloat = 340
+    static let width: CGFloat = 356
     let model: MenuModel
     let host: UIHostingController<MenuOverlay>
     weak var root: UIViewController?
