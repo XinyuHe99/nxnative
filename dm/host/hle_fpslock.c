@@ -11,10 +11,12 @@
 // period, so frames at exactly 16.667 ms came 0.11 ms late each on the Mac (59.6 fps, every 150th frame shown two vsyncs). Slightly shorter, the host's present pacing sets the pace
 // (the acquire waits): Luigi's Mansion 3's display interval p99 18.69 → 16.67 ms, 60.0 fps. Not at 30: with present_interval display the presents follow every vsync and hold no
 // frame for two, so a shorter time showed some frames for one (30.4 fps); 30 writes the game's own 33.333 ms
-enum { FPS_F32, VSYNCS_I32, MS_F32, FPS_I32 };
+// Also: a frame time in ticks as a uint32 (scale / frame rate: 19,200,000 for the Switch's 19.2 MHz system tick), a frame step in seconds as a float (1 / frame rate), and a mode
+// switch an engine reads before it takes those fields at all (written 1 at any target)
+enum { FPS_F32, VSYNCS_I32, MS_F32, FPS_I32, TICKS_U32, SECS_F32, MODE_U32 };
 #define MS_MARGIN 0.5f
 static float ms_want(int fps) { return 1000.0f / (float)fps - (fps == 60 ? MS_MARGIN : 0); }
-static const struct { const char *build, *what; uint64_t ptr_off; uint32_t field; uint8_t kind, copies; } k_locks[] = {
+static const struct { const char *build, *what; uint64_t ptr_off; uint32_t field; uint8_t kind, copies; uint32_t scale; } k_locks[] = {
     // Pokemon Brilliant Diamond 1.3.0: Unity's Application.targetFrameRate. Its icall registration (main+0xe34e60) resolves to main+0xdc8e70 -> +0x5fa640,
     // which stores w0 at main+0x4afc868; the getter at +0x5fa630 reads the same int32. The game sets 30 when entering the field; display pacing alone does not remove that cap.
     { "94ceae325c205c4b9d6f7235552f28fd", "Unity targetFrameRate", 0, 0x4afc868, FPS_I32, 1 },
@@ -60,6 +62,15 @@ static const struct { const char *build, *what; uint64_t ptr_off; uint32_t field
     // started; the limiter (main+0x7a3e70) runs jobs or sleeps until 33.333 ms have passed, the float at main+0x13c94dc (read only there, at main+0x7a3ea8 and main+0x7a3f18), and the game
     // steps by the time that really passed. The game asks for present interval 2 too, which the profile's present_interval display ignores; both are needed
     { "79e5950ffa85acf63e28c9aec051eac2", "NLG frame limiter target", 0, 0x13c94dc, MS_F32, 1 },
+    // Need for Speed: Hot Pursuit Remastered 1.0.3: Criterion's frame timing. A uint32 in main's bss (main+0xf0043c) selects the engine's 60 fps mode, in which it takes its frame time from
+    // the timer object at [main+0xed96a8]: +0x30 the frame in system ticks (19.2 MHz, 640,000 at 30 fps) and +0x28 a tenth of it; the game's own step, at [main+0xeffc60] +0x30 (2D) and +0x50
+    // (3D), is a float of seconds per frame. Its limiter, a spin on the system tick at main+0x483588..+0x4835a4, is cut by the rewriter (patches.py). From masagrator's FPSLocker config for this
+    // build (FPSLocker-Warehouse, patches/010029B0118E8000/799D1061182C1302.yaml; the frame-time instruction found by theboy181)
+    { "799d1061182c1302e08e706b84ce76e5", "Criterion 60 fps mode", 0, 0xf0043c, MODE_U32, 1, 0 },
+    { "799d1061182c1302e08e706b84ce76e5", "Criterion frame ticks", 0xed96a8, 0x30, TICKS_U32, 1, 19200000 },
+    { "799d1061182c1302e08e706b84ce76e5", "Criterion frame ticks / 10", 0xed96a8, 0x28, TICKS_U32, 1, 1920000 },
+    { "799d1061182c1302e08e706b84ce76e5", "Criterion 2D game step", 0xeffc60, 0x30, SECS_F32, 1, 0 },
+    { "799d1061182c1302e08e706b84ce76e5", "Criterion 3D game step", 0xeffc60, 0x50, SECS_F32, 1, 0 },
 };
 #define NLOCKS ((int)(sizeof k_locks / sizeof k_locks[0]))
 
@@ -190,6 +201,18 @@ void dm_fps_lock_tick(void) {
                 int ms = k_locks[k].kind == MS_F32; float f, w = ms ? ms_want(target) : (float)target; memcpy(&f, &cur, sizeof f); memcpy(&want, &w, sizeof want);
                 if (cur == want || !(ms ? f >= 8 && f <= 100 : f >= 10 && f <= 120)) continue;   // already set, or not set yet (RE Engine: 6000 at boot; Unreal: 0 = no limit until the config sets it)
                 snprintf(was, sizeof was, ms ? "%.3f ms" : "%g", f);
+            } else if (k_locks[k].kind == SECS_F32) {
+                float f, w = 1.0f / (float)target; memcpy(&f, &cur, sizeof f); memcpy(&want, &w, sizeof want);
+                if (cur == want || !(f >= 1.0f / 120 && f <= 0.1f)) continue;   // not set yet (0 before the game's first frame)
+                snprintf(was, sizeof was, "%.5f s", f);
+            } else if (k_locks[k].kind == TICKS_U32) {
+                want = k_locks[k].scale / (uint32_t)target;
+                if (cur == want || cur < k_locks[k].scale / 120 || cur > k_locks[k].scale / 10) continue;
+                snprintf(was, sizeof was, "%u", cur);
+            } else if (k_locks[k].kind == MODE_U32) {
+                want = 1;
+                if (cur) continue;   // already 1, or not this switch: 0 is the engine's default
+                snprintf(was, sizeof was, "%u", cur);
             } else {
                 int fps = k_locks[k].kind == FPS_I32;
                 want = fps ? (uint32_t)target : 60 / (uint32_t)target;
@@ -200,6 +223,9 @@ void dm_fps_lock_tick(void) {
             dm_guest_write_prepare(p, sizeof *p); __atomic_store_n(p, want, __ATOMIC_RELAXED);
             if (nlog[k] < 8) { nlog[k]++; char now[24];
                 if (k_locks[k].kind == MS_F32) snprintf(now, sizeof now, "%.3f ms (%d fps)", ms_want(target), target);
+                else if (k_locks[k].kind == SECS_F32) snprintf(now, sizeof now, "%.5f s (%d fps)", 1.0 / target, target);
+                else if (k_locks[k].kind == TICKS_U32) snprintf(now, sizeof now, "%u (%d fps)", want, target);
+                else if (k_locks[k].kind == MODE_U32) snprintf(now, sizeof now, "1 (%d fps)", target);
                 else snprintf(now, sizeof now, "%u%s", k_locks[k].kind == FPS_F32 ? (unsigned)target : want, k_locks[k].kind == FPS_F32 || k_locks[k].kind == FPS_I32 ? " fps" : " vsyncs");
                 LOG("main: %s%s %s → %s (%s)", k_locks[k].what, k_locks[k].copies > 1 ? (c ? " (render thread)" : " (game thread)") : "", was, now, src); }
         }
