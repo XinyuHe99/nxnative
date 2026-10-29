@@ -39,6 +39,8 @@
 #       and of the startup material archive LZSS-compressed in main, see rfrm_shaders and retro_main_forms
 #   · BERG (Snowdrop, Mario + Rabbids Sparks of Hope): shader objects in the individually zstd-compressed records of its SDF data slices, see snowdrop_shaders
 #   · bnd2 (Criterion's Bundle 2, Need for Speed: Hot Pursuit Remastered): whole GLSLC outputs in the zlib resources of SHADERS.BNDL, see bnd2_resources and bnd2_shaders
+#   · Frostbite (EA SPORTS FC 27): the CompiledBytecode resources of the bundles its superbundle tables (.toc) list, in its cas files (Oodle Leviathan, decoded by the game's own decoder in the
+#       Mac host), each a VNVN record with one code area and control section (frostbite.py), see frostbite_jobs and frostbite_shaders
 #   · Unreal Engine 3 (Batman: Arkham Knight): shader records in its global shader cache (BMSG) and in the packages (the combined shader cache), whose compressed chunks are Oodle blocks decoded by the game's own decoder in the Mac host, see ue3_body and ue3_shaders
 # Code area: 0x30 header + (graphics) 0x50 SPH + instructions; header magic 0x12345678 for graphics, 0x12345679 for compute. The control section starts with 0x98761234, +0x704 = code area length,
 #   +0x700 = start of the c1 constant segment within the code area; for compute +0x748 thread group xyz (u32 ×3), +0x754 shared memory bytes (checked one by one against PC reflection on D2R's 22 compute shaders).
@@ -1587,6 +1589,43 @@ def trpfs_jobs(files, parts=64):
         taken |= {p, p[:-1] + 'd'}
     return jobs, taken
 
+FB_CAS = 'Frostbite cas'
+def frostbite_jobs(files, parts=64):
+    """Frostbite (EA SPORTS FC 27): its shaders are the CompiledBytecode resources of the bundles (frostbite.resources), stored in the cas files. → ([(cas path, rel, (FB_CAS, ((offset,
+    stored size, size, name), …))), …] in about equal stored sizes, the paths taken: every .toc and .cas file, which hold nothing a loose scan reads (31.8 GB in FC 27)"""
+    import frostbite
+    roots = {p[:-len('Data/layout.toc')] for p, _ in files if p.endswith(os.sep + os.path.join('Data', 'layout.toc'))}
+    jobs, taken = [], set()
+    for root in sorted(roots):
+        if not frostbite.is_frostbite(root): continue
+        res = frostbite.resources(root, frostbite.COMPILED_BYTECODE)
+        rel_of = {p: r for p, r in files if p.startswith(root)}
+        taken |= {p for p in rel_of if p.endswith(('.toc', '.cas'))}
+        by_cas = collections.defaultdict(list)
+        for (cas, off, stored), (size, name) in res.items(): by_cas[cas].append((off, stored, size, name))
+        step = sum(stored for (_, _, stored) in res) / parts
+        for cas in sorted(by_cas):
+            cur, size_ = [], 0
+            for e in sorted(by_cas[cas]):
+                cur.append(e); size_ += e[1]
+                if size_ >= step: jobs.append((cas, rel_of[cas], (FB_CAS, tuple(cur)))); cur, size_ = [], 0
+            if cur: jobs.append((cas, rel_of[cas], (FB_CAS, tuple(cur))))
+    return jobs, taken
+
+def frostbite_shaders(path, rel, ents, out):
+    """A range of one cas file's CompiledBytecode resources (frostbite_jobs), each decoded with the game's Oodle and read as one shader (frostbite.nvn_shader). Labels: /<cas>#<resource name>"""
+    import frostbite
+    from romfs import mmap
+    with open(path, 'rb') as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as d:
+        for off, stored, size, name in ents:
+            label = f'/{rel}#{name}'
+            sh = frostbite.nvn_shader(frostbite.read(d, off, stored, size, oodle))
+            if sh is None: print(f'[RED] {label}: a CompiledBytecode resource without a VNVN record; left out', flush=True); continue
+            code, ctl = sh; st = glslc_stage(ctl, code)
+            why = check(label, st, ctl, code) if st else 'no stage in the code area header'
+            if why: print(f'[RED] {label}: {why}; left out', flush=True); continue
+            out.append((label, st, ctl, code))
+
 def smash_arc_jobs(files, parts=128):
     """Super Smash Bros. Ultimate's data.arc (17.6 GB, smash_arc.py): the game's current files, in ranges of about equal stored size. → ([(path, rel, entries), …], the paths taken)"""
     import smash_arc
@@ -2338,6 +2377,9 @@ def scan_file_in(args):
     if len(args) > 2 and args[2][0] == UE_LEGACY:   # files of a legacy Unreal pak (ue_legacy_jobs)
         ue_legacy_shaders(path, rel, args[2][1], found)
         return rel, uniq_keys(found), var_pairs(found), trees
+    if len(args) > 2 and args[2][0] == FB_CAS:   # CompiledBytecode resources of a Frostbite cas file (frostbite_jobs)
+        frostbite_shaders(path, rel, args[2][1], found)
+        return rel, uniq_keys(found), var_pairs(found), trees
     if len(args) > 2 and head[:4] == PKZL:   # entries of a PlatinumGames PKZ (pkz_jobs)
         pkz_shaders(path, rel, args[2], found)
         return rel, uniq_keys(found), var_pairs(found), trees
@@ -2506,8 +2548,9 @@ def main():
     ck_jobs, cpks = cpk_jobs(files)   # Bayonetta 2's CRI CPK archives (CRILAYLA entries)
     zp_jobs, zips = zip_jobs(files)   # Portal's game.zip (Deflate members)
     ah_jobs, arhs = arh_jobs(files)   # Monolith's ARH1/ARD archives and embedded XBC1/HCPS programs
-    big += pak_jobs + tr_jobs + ue_jobs + bd_jobs + arc_jobs + pz_jobs + ck_jobs + zp_jobs + ah_jobs
-    files = [(p, r) for p, r in files if not linkdata_jobs(p, r) and p not in paks and p not in trp and p not in uep and p not in bdts and p not in arcs and p not in pkzs and p not in cpks and p not in zips and p not in arhs]
+    fb_jobs, fbs = frostbite_jobs(files)   # EA SPORTS FC 27's Frostbite bundles, Oodle Leviathan decoded by the game's own decoder in the Mac host
+    big += pak_jobs + tr_jobs + ue_jobs + bd_jobs + arc_jobs + pz_jobs + ck_jobs + zp_jobs + ah_jobs + fb_jobs
+    files = [(p, r) for p, r in files if not linkdata_jobs(p, r) and p not in paks and p not in trp and p not in uep and p not in bdts and p not in arcs and p not in pkzs and p not in cpks and p not in zips and p not in arhs and p not in fbs]
     with cf.ProcessPoolExecutor(J, initializer=_pool_init, initargs=(common, {}, zdicts)) as ex:
         n = len(big) + len(files)
         results += pooled(ex, big, n) + pooled(ex, files, n, len(big), chunk=16)

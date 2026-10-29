@@ -65,4 +65,4 @@ General host changes first needed here; each applies to every game:
 
 ## Open
 
-- The player-facing [README](../../../README.md) says the games outside its 2D list start in the 3D layout; Balatro starts in Tap (its entry in the games list says "played by touch").
+- The player-facing [README](../../../README.md) says the games outside its 2D list start in the 3D layout; Balatro starts in Tap (its gallery entry says "played by touch").

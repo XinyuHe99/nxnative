@@ -1,7 +1,7 @@
 """The repository's own Markdown stays navigable: every relative link and #anchor resolves (GitHub's heading anchors), every game profile has its note
 (dm/games/<id>/README.md) and a row in the games table of dm/games/README.md, the symptom index (docs/agents/symptoms.md) is the one dm/tools/docs_symptoms.py writes from
 docs/reference, the patch index (docs/agents/game-patches.md) is the one dm/tools/docs_patches.py writes from the patch files, host tables and profiles, and the entry points stay short: AGENTS.md at most 1,500 words, each numbered guide in docs/agents at most 6,000 (a new finding goes into a game note or a
-reference, not into these), and README's games list is the one dm/tools/docs_games.py writes from docs/games.tsv. Third-party trees are left out. No game files needed."""
+reference, not into these), and README's games gallery is the one dm/tools/docs_gallery.py writes from docs/images/gallery.tsv. Third-party trees are left out. No game files needed."""
 from pathlib import Path
 import re
 import subprocess
@@ -14,7 +14,7 @@ from urllib.parse import unquote
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / 'dm/tools'))
 import docs_symptoms   # noqa: E402
-import docs_games   # noqa: E402
+import docs_gallery   # noqa: E402
 import docs_patches   # noqa: E402
 
 SKIP = ('third_party', 'node_modules')
@@ -93,33 +93,35 @@ class PatchIndex(unittest.TestCase):
         self.assertEqual(docs_patches.OUT.read_text(), docs_patches.page(), 'docs/agents/game-patches.md is out of date: run dm/tools/docs_patches.py')
 
 
-class GamesList(unittest.TestCase):
-    def test_games_list_is_current(self):
-        self.assertEqual(docs_games.OUT.read_text(encoding='utf-8'), docs_games.readme(), 'README.md: the games list is out of date: run dm/tools/docs_games.py')
+class Gallery(unittest.TestCase):
+    def test_gallery_is_current(self):
+        self.assertEqual(docs_gallery.OUT.read_text(encoding='utf-8'), docs_gallery.readme(), 'README.md: the gallery is out of date: run dm/tools/docs_gallery.py')
 
-    def test_plain_text_names_and_no_remark(self):
-        tid = docs_games.rows()[0][2]
+    def test_plain_text_captions_and_no_remark(self):
+        image, tid = docs_gallery.rows()[0][::3]
         with tempfile.TemporaryDirectory() as folder:
-            table = Path(folder) / 'games.tsv'
-            table.write_text(f'A_B: *Adventure* [2]\t\t{tid}\n', encoding='utf-8')
-            with patch.object(docs_games, 'TABLE', table):
-                self.assertEqual(docs_games.games(), f'- [A\\_B: \\*Adventure\\* \\[2\\]](dm/games/{tid}/README.md)')
-            self.assertEqual(docs_games.item('Game', '60 fps & more', tid), f'- [Game](dm/games/{tid}/README.md) — 60 fps & more')
+            table = Path(folder) / 'gallery.tsv'
+            table.write_text(f'{image}\tA & B: "Adventure" <2>\t\t{tid}\n', encoding='utf-8')
+            with patch.object(docs_gallery, 'TABLE', table):
+                text = docs_gallery.gallery()
+                self.assertIn('alt="A &amp; B: &quot;Adventure&quot; &lt;2&gt;"', text)
+                self.assertIn(f'<br><small><b><a href="dm/games/{tid}/README.md">A &amp; B: &quot;Adventure&quot; &lt;2&gt;</a></b></small></td>', text)
+            self.assertIn('Game</a></b><br>60 fps &amp; more</small></td>', docs_gallery.cell(image, 'Game', '60 fps & more', tid))
 
     def test_reversed_markers_fail_before_writing(self):
         with tempfile.TemporaryDirectory() as folder:
             out = Path(folder) / 'README.md'
-            text = f'{docs_games.END}\nKeep this text\n{docs_games.BEGIN}\n'
+            text = f'{docs_gallery.END}\nKeep this text\n{docs_gallery.BEGIN}\n'
             out.write_text(text, encoding='utf-8')
-            with patch.object(docs_games, 'OUT', out), self.assertRaisesRegex(SystemExit, 'end marker must follow'):
-                docs_games.readme()
+            with patch.object(docs_gallery, 'OUT', out), self.assertRaisesRegex(SystemExit, 'end marker must follow'):
+                docs_gallery.readme()
             self.assertEqual(out.read_text(encoding='utf-8'), text)
 
     def test_concurrent_additions_merge_and_regenerate(self):
-        games = docs_games.rows()[:5]
+        games = docs_gallery.rows()[:5]
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            table, out = root / 'docs/games.tsv', root / 'README.md'
+            table, out = root / 'docs/images/gallery.tsv', root / 'README.md'
             table.parent.mkdir(parents=True)
             (root / '.gitattributes').write_bytes((REPO / '.gitattributes').read_bytes())
 
@@ -129,12 +131,12 @@ class GamesList(unittest.TestCase):
                                       cwd=root, check=check, capture_output=True, text=True)
 
             def write(rows):
-                table.write_text(''.join('\t'.join(row) + '\n' for row in rows), encoding='utf-8')
-                out.write_text(f'Before\n{docs_games.BEGIN}\n{docs_games.END}\nAfter\n', encoding='utf-8')
-                with patch.object(docs_games, 'TABLE', table), patch.object(docs_games, 'OUT', out):
-                    out.write_text(docs_games.readme(), encoding='utf-8')
+                table.write_text(''.join('\t'.join(row).rstrip('\t') + '\n' for row in rows), encoding='utf-8')
+                out.write_text(f'Before\n{docs_gallery.BEGIN}\n{docs_gallery.END}\nAfter\n', encoding='utf-8')
+                with patch.object(docs_gallery, 'TABLE', table), patch.object(docs_gallery, 'OUT', out):
+                    out.write_text(docs_gallery.readme(), encoding='utf-8')
                 git('add', '.')
-                git('commit', '-m', 'Games list fixture')
+                git('commit', '-m', 'Gallery fixture')
 
             git('init', '-b', 'base')
             write(games[:3])
@@ -145,30 +147,31 @@ class GamesList(unittest.TestCase):
             self.assertEqual(git('merge', '--no-commit', '--no-ff', 'ours', check=False).returncode, 1)
             self.assertIn('<<<<<<<', out.read_text(encoding='utf-8'))
             self.assertEqual(git('diff', '--name-only', '--diff-filter=U').stdout.strip(), 'README.md')
-            with patch.object(docs_games, 'TABLE', table), patch.object(docs_games, 'OUT', out):
-                self.assertCountEqual(docs_games.rows(), games)
-                text = docs_games.readme()
+            with patch.object(docs_gallery, 'TABLE', table), patch.object(docs_gallery, 'OUT', out):
+                self.assertCountEqual(docs_gallery.rows(), games)
+                text = docs_gallery.readme()
             self.assertNotIn('<<<<<<<', text)
-            self.assertTrue(text.startswith(f'Before\n{docs_games.BEGIN}\n'))
-            self.assertTrue(text.endswith(f'\n{docs_games.END}\nAfter\n'))
-            self.assertEqual(text.count('\n- ['), len(games))
+            self.assertTrue(text.startswith(f'Before\n{docs_gallery.BEGIN}\n'))
+            self.assertTrue(text.endswith(f'\n{docs_gallery.END}\nAfter\n'))
+            self.assertEqual(text.count('<img '), len(games))
 
     def test_union_merge_rejects_conflicting_game_rows(self):
-        first, second = docs_games.rows()[:2]
-        # Concurrent name and remark edits must require a manual resolution even when the names differ.
-        for field, changes in (('title ID', {0: 'Corrected name'}), ('name', {2: second[2]})):
+        first, second = docs_gallery.rows()[:2]
+        # Concurrent caption/screenshot and remark edits must require a manual resolution even when the names differ.
+        for field, changes in (('image', {1: 'Corrected caption'}), ('name', {0: second[0]}),
+                               ('title ID', {0: second[0], 1: 'Corrected caption'})):
             with self.subTest(field=field), tempfile.TemporaryDirectory() as folder:
                 base = list(first)
                 ours, theirs = base.copy(), base.copy()
                 for i, value in changes.items(): ours[i] = value
-                theirs[1] = 'controller only'
+                theirs[2] = 'controller only'
                 paths = [Path(folder) / f'{side}.tsv' for side in ('ours', 'base', 'theirs')]
                 for path, row in zip(paths, (ours, base, theirs)): path.write_text('\t'.join(row) + '\n', encoding='utf-8')
                 result = subprocess.run(['git', 'merge-file', '--union', '-p', *map(str, paths)], check=True, capture_output=True, text=True)
                 merged = Path(folder) / 'merged.tsv'
                 merged.write_text(result.stdout, encoding='utf-8')
-                with patch.object(docs_games, 'TABLE', merged), self.assertRaisesRegex(SystemExit, f'duplicate {field}'):
-                    docs_games.readme()
+                with patch.object(docs_gallery, 'TABLE', merged), self.assertRaisesRegex(SystemExit, f'duplicate {field}'):
+                    docs_gallery.readme()
 
 
 class Length(unittest.TestCase):

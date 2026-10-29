@@ -424,6 +424,13 @@ Games read this count as a position in their own command memory and size their h
 - **Found on:** [FINAL FANTASY X/X-2 HD Remaster](../../dm/games/0100BC300CB48000/README.md), launcher and both games.
 - **Check:** `t_nvn` invokes both setters through the real entry-point lookup and checks initialized sampler state.
 
+### Bound handles are the driver's 32-bit words
+
+- **Symptom:** `[RED] sampler ID 4096 not registered` (or another ID past the sampler pool), once, from the first frames on.
+- **Cause:** NVN's texture, separate texture and sampler handles are 64-bit, but the driver writes each bound one into the c2 handle table as a 32-bit word (texture ID in bits 0-19, sampler ID in bits 20-31), so the GPU never sees the upper half. The host kept the whole 64 bits of the handles of `nvnCommandBufferBindTextures`, `BindSeparateTextures`, `BindSeparateSamplers` and `BindImages`, and took the sampler ID as the handle shifted right by 20. EA SPORTS FC 27 binds separate textures with bit 32 set (`0x1000001d1`, texture 0x1d1): a shader that takes its sampler from that combined word got ID 4096, where the GPU reads sampler 0. The single `nvnCommandBufferBindTexture` record already read its handle as 32 bits.
+- **Fix:** `bind_handles` (`hle_nvn.c`) keeps the low 32 bits of each handle before it moves the IDs to the part of the host's table of the pool the command buffer bound (which may then pass 12 bits).
+- **Found on:** [EA SPORTS FC 27](../../dm/games/0100C49025D3E000/README.md), at the title and in the menus.
+
 ### Version and capability checks that fail quietly
 
 - **Symptom:** device / subsystem setup returns quietly and the next stage never starts.
@@ -477,6 +484,20 @@ Games read this count as a position in their own command memory and size their h
 - **Symptom:** an abort in device setup when `nvnTexturePoolGetSize` / `nvnSamplerPoolGetSize` returned 0.
 - **Fix:** implemented: `nvnTexturePoolGetSize` / `nvnSamplerPoolGetSize` and their memory pool / offset getters; `nvnCommandBufferFenceSync`, which Unreal's RHI records in its command buffers ([Fence syncs recorded in command buffers](#fence-syncs-recorded-in-command-buffers)); `nvnTextureGetTextureAddress` (pool address + offset, as `nvnMemoryPoolGetBufferAddress`); `nvnCommandBufferGetCommandMemorySize` (used + free, as in NVN; `GetCommandMemoryFree` is what is left in the current segment).
 - **Found on:** [Octopath Traveler 0](../../dm/games/01005270232F2000/README.md) (the pool getters and `nvnCommandBufferFenceSync`, new with Unreal); [DRAGON QUEST XI S](../../dm/games/01006C300E9F0000/README.md) (Unreal Engine 4.18: `nvnTextureGetTextureAddress`, `nvnCommandBufferGetCommandMemorySize`).
+
+### Builder storage getters
+
+- **Symptom:** `[RED] NVN unimplemented function called: nvnTextureBuilderGetMemoryOffset`, then `nvnTextureBuilderGetRawStorageClass`.
+- **Cause:** the renderer reads a texture builder's storage back before it initializes the texture; the host had the texture's getters (`nvnTextureGetMemoryPool` / `Offset` / `RawStorageClass`) but not the builders'.
+- **Fix:** the texture, buffer and event builders return the pool and offset `SetStorage` stored (the pool getters return its address, as `nvnTextureGetMemoryPool` does; the header the prototypes come from declares the builders' by value, so they are `NVN_NOPROTO`), and the texture builder's raw storage class is the texture's (1): it only names the page kind a virtual pool maps (`NVNmappingRequest.storageClass`), which the host's virtual pools do not distinguish.
+- **Found on:** [EA SPORTS FC 27](../../dm/games/0100C49025D3E000/README.md) (SDK 22, Frostbite's NVN renderer NRO).
+
+### `Map` of a pool without CPU access returns NULL
+
+- **Symptom:** `[nvn-mtl] FATAL buffer copy address is in no memory pool src=0x70d08a8b00 dst=0 n=0x29a00` as a match loads: a recorded `CopyBufferToBuffer` whose destination is 0.
+- **Cause:** NVN maps a buffer or pool created with `NVN_MEMORY_POOL_FLAGS_CPU_NO_ACCESS` to NULL, and the game depends on it: Frostbite's renderer (`OpcodeCopySubresource` in `Engine.Render.Core2.PlatformNvn.nro`) takes a buffer's GPU address as `nvnBufferGetAddress + (its data pointer − nvnBufferMap)`, with a null data pointer for a GPU-only buffer. The host's storage is CPU memory, and its `Map` returned the same pointer `GetAddress` does, so the sum came to 0 (traced to a `BufferMap` of a pool with flags `0x21`, CPU_NO_ACCESS | GPU_CACHED, right before the copy).
+- **Fix:** `nvnBufferMap` and `nvnMemoryPoolMap` return NULL when the pool has no CPU access, as in NVN (`hle_nvn.c`). The host's own accesses to the storage go through the pool, not through `Map`.
+- **Found on:** [EA SPORTS FC 27](../../dm/games/0100C49025D3E000/README.md) (SDK 22): the first match load.
 
 ### NVN calls that were red stubs
 

@@ -700,6 +700,13 @@ The replay on Metal (`dm/gfx/nvn/nvn_mtl.m`) and the Vulkan and OpenGL layers. E
 
 ## Uniforms, copies and ordering
 
+### Depth plane copies between depth formats
+
+- **Symptom:** `[RED] texture→texture copy case not implemented: 1920x1080x1→1920x1080x1 flags 0 format 260→252 3D 0→0`.
+- **Cause:** the game copies its depth-stencil target (Metal `Depth32Float_Stencil8`, 260) into a depth-only texture (`Depth32Float`, 252) of the same size. A Metal blit copies only between equal formats, and the draw path does not take depth formats.
+- **Fix:** such a copy, either way between the two formats, goes through a staging buffer kept from copy to copy: the 32-bit float depth is copied out of the source with `MTLBlitOptionDepthFromDepthStencil` and into the destination's depth plane the same way (`nvn_mtl.m`, the texture copy).
+- **Found on:** [EA SPORTS FC 27](../../dm/games/0100C49025D3E000/README.md) (Frostbite): from the title on.
+
 ### Inline uniform updates as ordered GPU copies
 
 - **Cause:** reading the uniform buffer from the CPU at encode time gives the frame's *last* value, not the draw's.

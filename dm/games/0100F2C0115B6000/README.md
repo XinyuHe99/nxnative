@@ -83,6 +83,8 @@ General host changes first needed here; each applies to every game:
 
 - **Resolved in the host: render passes into textures uploaded from their storage** write the storage, and storage-backed textures get render-target use when attached: [Render passes into textures uploaded from their storage](../../../docs/reference/nvn-objects.md#render-passes-into-textures-uploaded-from-their-storage). Covered by `t_readback`; checked on the Mac along the grass route.
 
+- **Early fragment tests from control +0x718 (chain a76212ee4af0):** [Early fragment tests from the control section](../../../docs/reference/shaders.md#early-fragment-tests-from-the-control-section). 1,677 of the 1.4.3 pixel shaders set the flag, none of them writes depth. The Great Sky Island lattice dots that MacNativeGames reported were not reproduced or checked here.
+
 - **Display link at frame latency 2 in fullscreen (#347, a workaround; why the system misses at 16 ms is open):** [Frame latency 2 for the display link in fullscreen](../../../docs/reference/frame-rate.md#frame-latency-2-for-the-display-link-in-fullscreen). Measured from the issue #70 save on an M4 Pro's built-in ProMotion screen: a window held 60; fullscreen at latency 1 stepped to 20 fps on cheap frames in one run of three.
 
 - **RomFS folder transfer and startup deletion failures:** [RomFS images](../../../docs/reference/packing.md#romfs-folder-transfers-fail-or-leave-stale-game-files).
