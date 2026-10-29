@@ -2,8 +2,8 @@
 
 How to build and install a game: [README](../README.md#how-to-play).
 
-- **Settings:** a screen before the game starts sets frame rate, resolution, docked or handheld mode, language, the performance overlay, **Ambient mode**, rumble and more. Tap **Play**; your choices are remembered. What each one does: [Settings](settings.md).
-- **In-game menu:** swipe in from the left edge of the screen during play. It pauses the game and offers a screenshot, shaking the controller, muting, quitting, the touch-control layout and opacity, docked or handheld mode, the performance overlay and Ambient mode; it shows only what the game offers.
+- **Settings:** a screen before the game starts sets frame rate, resolution, docked or handheld mode, language, **Ambient mode**, rumble and more. Tap **Play**; your choices are remembered. What each one does: [Settings](settings.md).
+- **In-game menu:** swipe in from the left edge of the screen during play. The game keeps running under it. It offers the frame rate, a screenshot, shaking the controller, muting, quitting, the touch-control layout and opacity, docked or handheld mode and Ambient mode; it shows only what the game offers.
 - **Ambient mode:** off by default. The bars beside the 16:9 picture show its edges mirrored and blurred (iOS 26's background extension effect), at a small cost in power. It is not offered on a 16:9 screen, which has no bars. `DM_AMBIENT=1` or `0` in `Documents/env.txt` overrides it.
 - **Saves and logs** are in the Files app, under the game's name: `save/` and `log.txt` (the previous run is `log.prev.txt`). When something goes wrong, send `log.txt`.
 - **Reinstalling:** some sideloading tools give a reinstalled app a new data folder. Copy `save/` and `pso_user.tsv` over from the old one to keep your progress.

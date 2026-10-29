@@ -1,5 +1,5 @@
 // iOS front end (the iOS implementation of front.h): a centered 16:9 Metal view (black bars on both sides, or its edges extended into them in Ambient mode) + a full-screen virtual gamepad layer (DmGamepad.m, controls drawn over the picture)
-// + the in-game menu over both (GameMenu.swift: a swipe in from the left edge; it holds the game while open, front_menu_hold).
+// + the in-game menu over both (GameMenu.swift: a swipe in from the left edge).
 // The host runs on the big-stack thread started by main.m; front_run runs the guest directly on the calling thread.
 #import <UIKit/UIKit.h>
 #import <QuartzCore/CAMetalLayer.h>
@@ -23,7 +23,7 @@ void dm_menu_install(void *view_controller);   // GameMenu.swift: the edge swipe
 static CAMetalLayer *g_layer;
 static void front_ios_power_watch(void);
 static void front_ios_audio_watch(void);
-static UIView *front_ios_perf_overlay(void);
+static UILabel *front_ios_fps_label(void);
 
 @interface DmGameView : UIView
 @end
@@ -49,7 +49,7 @@ static UIView *front_ios_perf_overlay(void);
 @property (nonatomic, strong) DmGameView *game;
 @property (nonatomic, strong) UIBackgroundExtensionView *ambient;   // Ambient mode: holds the game view (below); nil while it is off
 @property (nonatomic, strong) UIView *pad;
-@property (nonatomic, strong) UIView *fps;
+@property (nonatomic, strong) UILabel *fps;
 @property (nonatomic) BOOL launched;
 - (void)startGame;
 - (void)setAmbientOn:(BOOL)on;
@@ -71,7 +71,7 @@ static void launcher_done(void) { [g_root startGame]; }
     }
     front_ios_audio_watch();
 }
-// The game view, the pad and the performance overlay are made once the launcher has set the switches they read (DM_PERF_OVERLAY, DM_METAL_HUD); the host's loading began at app launch (main.m)
+// The game view, the pad and the frame-rate counter are made once the launcher has set the switches they read (DM_SHOW_FPS, DM_METAL_HUD); the host's loading began at app launch (main.m)
 - (void)startGame {
     if (self.game) return;
     front_hud_env();   // before the game view makes its device (an env file's DM_METAL_HUD sets it in main.m already)
@@ -84,8 +84,8 @@ static void launcher_done(void) { [g_root startGame]; }
     self.pad = dm_gamepad_view(self.view.bounds);
     self.pad.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [self.view addSubview:self.pad];
-    self.fps = front_ios_perf_overlay();   // above the pad, which hides while a controller is connected
-    [self.view addSubview:self.fps];
+    self.fps = front_ios_fps_label();   // above the pad, which hides while a controller is connected
+    if (self.fps) [self.view addSubview:self.fps];
     dm_menu_install((__bridge void *)self);   // over everything
     [self.view setNeedsLayout]; [self.view layoutIfNeeded];
     UIApplication.sharedApplication.idleTimerDisabled = YES;
@@ -97,10 +97,9 @@ static void launcher_done(void) { [g_root startGame]; }
     CGFloat w = b.size.width, h = b.size.height;   // Fit 16:9 into the whole screen
     if (w / h > 16.0 / 9.0) w = h * 16.0 / 9.0; else h = w * 9.0 / 16.0;
     self.game.frame = CGRectMake(floor((b.size.width - w) / 2), floor((b.size.height - h) / 2), w, h);   // the extension view fills the root view, so the frame is the same in it
-    {   // the performance overlay: the top row's free stretch (the panel reaches down from there): right of DmGamepad.m's L3 key (102 + 17 of its units from the safe edge), level with − / + (22 units down); u is its unit
+    if (self.fps) {   // the top row's free stretch: right of DmGamepad.m's L3 key (102 + 17 of its units from the safe edge), level with − / + (22 units down); u is its unit
         CGRect s = UIEdgeInsetsInsetRect(b, self.view.safeAreaInsets); CGFloat u = MIN(b.size.height / 430.0, 1.3);
-        CGSize fs = [self.fps sizeThatFits:CGSizeZero];
-        self.fps.frame = CGRectMake(floor(CGRectGetMinX(s) + 130 * u), floor(CGRectGetMinY(s) + fmax(8 * u, 22 * u - fs.height / 2)), fs.width, fs.height);
+        self.fps.frame = CGRectMake(floor(CGRectGetMinX(s) + 130 * u), floor(CGRectGetMinY(s) + 22 * u - 11), 64, 22);
     }
 }
 - (void)viewDidAppear:(BOOL)a {
@@ -158,40 +157,25 @@ static void front_ios_power_watch(void) {
     LOG("front end: thermal state %d, brightness %.2f, Low Power Mode %s", dm_thermal_now(), g_brightness, dm_low_power_now() ? "on" : "off");
 }
 
-// Performance overlay (DmPerfPanel.m): off, the frame-rate badge or the performance panel. Frames are those put on screen (nvn_mtl.m counts them for NVN and for the Vulkan
-// layer alike; frames the display link merged away are not counted), the target is the frame step's (60 without one), GPU time is that of the last frame the GPU finished
-// (hle_nvn.c's frame count, nvn_mtl.m's timing; none for a game whose GPU work is not timed). The mode: DM_PERF_OVERLAY=0 / 1 / 2 (the launcher's Performance overlay,
-// or Documents/env.txt), else the frame-rate badge when the IPA was built with it (the NSP script's SHOW_FPS → DMShowFPS in Info.plist; DM_SHOW_FPS=0 / 1 in env.txt overrides
-// that). The in-game menu changes it and shows the frame rate it keeps
+// Frame-rate counter: the frames put on screen in the last second (nvn_mtl.m counts them for NVN and for the Vulkan layer alike; frames the display link merged away are not counted).
+// On when the IPA was built with it (the NSP script's SHOW_FPS / --show-fps → DMShowFPS in Info.plist); DM_SHOW_FPS=0 / 1 in Documents/env.txt overrides that without a rebuild. NULL when off
 uint64_t mtl_present_count(void);
-uint64_t dm_nvn_frame_count(void);
-double mtl_gpu_ms(uint64_t f);
-UIView *dm_perf_overlay(uint64_t (*frames)(void), double (*gpu_ms)(void), double (*target)(void), bool (*held)(void));
-void dm_perf_overlay_set_mode(UIView *v, int mode);
-int dm_perf_overlay_mode(UIView *v);
-double dm_perf_overlay_fps(UIView *v);
-static int g_menu_hold;
-static bool front_ios_held(void);   // the menu or the background holds the game (below)
-static double front_ios_gpu_ms(void) {   // the last frame whose GPU work is done, up to 8 back (as hle_nvn.c's timing line)
-    uint64_t n = dm_nvn_frame_count();
-    for (uint64_t f = n; f-- > 0 && n - f <= 8;) { double g = mtl_gpu_ms(f); if (g >= 0) return g; }
-    return -1;
+static UILabel *front_ios_fps_label(void) {
+    const char *e = getenv("DM_SHOW_FPS");
+    if (!(e ? atoi(e) != 0 : [[NSBundle.mainBundle objectForInfoDictionaryKey:@"DMShowFPS"] boolValue])) return nil;
+    UILabel *l = [UILabel new];
+    l.font = [UIFont monospacedDigitSystemFontOfSize:13 weight:UIFontWeightSemibold]; l.textColor = UIColor.whiteColor; l.textAlignment = NSTextAlignmentCenter;
+    l.backgroundColor = [UIColor colorWithWhite:0 alpha:0.45]; l.layer.cornerRadius = 6; l.layer.masksToBounds = YES; l.userInteractionEnabled = NO;
+    l.text = @"-- fps";
+    __block uint64_t n0 = mtl_present_count(); __block double t0 = CACurrentMediaTime();
+    [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *t) {
+        (void)t; uint64_t n = mtl_present_count(); double now = CACurrentMediaTime();
+        if (now - t0 < 1.5) l.text = [NSString stringWithFormat:@"%.0f fps", (n - n0) / (now - t0)];   // a longer span is the time in the background: no reading
+        n0 = n; t0 = now;
+    }];
+    LOG("front end: frame-rate counter on");
+    return l;
 }
-static double front_ios_target_fps(void) { return dm_fps_state ? *(float *)dm_fps_state : 0; }
-static UIView *front_ios_perf_overlay(void) {
-    UIView *v = dm_perf_overlay(mtl_present_count, front_ios_gpu_ms, front_ios_target_fps, front_ios_held);
-    const char *m = getenv("DM_PERF_OVERLAY"), *e = getenv("DM_SHOW_FPS");
-    int mode = m ? atoi(m) : (e ? atoi(e) != 0 : [[NSBundle.mainBundle objectForInfoDictionaryKey:@"DMShowFPS"] boolValue]);
-    dm_perf_overlay_set_mode(v, mode);
-    if (mode) LOG("front end: performance overlay %s", mode == 2 ? "panel" : "frame rate");
-    return v;
-}
-int front_menu_perf_mode(void) { return g_root.fps ? dm_perf_overlay_mode(g_root.fps) : 0; }
-void front_menu_set_perf_mode(int mode) {
-    dm_perf_overlay_set_mode(g_root.fps, mode); [g_root.view setNeedsLayout];
-    LOG("front end: performance overlay %s from the menu", mode == 2 ? "panel" : mode == 1 ? "frame rate" : "off");
-}
-double front_menu_fps(void) { return dm_perf_overlay_fps(g_root.fps); }
 bool front_menu_ambient(void) { return g_root.ambient != nil; }
 void front_menu_set_ambient(bool on) { [g_root setAmbientOn:on]; }
 
@@ -285,9 +269,8 @@ void front_ios_audio_session(void) {
 // Real audio output is suspended (the silent sink paces the game) while the app is in the background or another audio session has interrupted ours (Siri, an alarm, a call).
 // Without the interruption observer the AudioUnits stayed "started" while iOS no longer called them, and a game waiting for its buffers back lost its sound until restart.
 // All of this runs on the main queue, like the scene callbacks
-static int g_audio_bg, g_audio_intr, g_audio_mute;
-static bool front_ios_held(void) { return g_menu_hold || g_audio_bg; }
-static void front_ios_audio_apply(void) { dm_audio_suspend(g_audio_bg || g_audio_intr || g_audio_mute || g_menu_hold); }
+static int g_audio_bg, g_audio_intr, g_audio_mute;   // g_audio_mute: the in-game menu's Mute
+static void front_ios_audio_apply(void) { dm_audio_suspend(g_audio_bg || g_audio_intr || g_audio_mute); }
 bool front_menu_muted(void) { return g_audio_mute; }
 void front_menu_set_muted(bool on) { g_audio_mute = on; LOG("front end: sound %s from the menu", on ? "muted" : "on"); front_ios_audio_apply(); }
 static void front_ios_audio_watch(void) {
@@ -307,40 +290,20 @@ static void front_ios_audio_watch(void) {
     }];
 }
 
-// Graphics are suspended while the app is in the background or the in-game menu holds the game, resumed when neither does (the two come and go independently)
-static int g_gfx_held;
-static void front_ios_gfx_hold(void) {
-    int want = g_audio_bg || g_menu_hold;
-    if (want != g_gfx_held) { g_gfx_held = want; dm_gfx_suspend(want); }
-}
-
 // Scene lifecycle (called by SceneDelegate in main.m): 0 resign active, 1 enter background, 2 return to foreground, 3 become active. On entering background, freeze the guest clock and suspend after in-flight GPU work completes (submitting GPU work in background gets the process killed).
 // The screen stays on while the game is active: only touches reset the idle timer, so with a controller (or during a cutscene) the screen dimmed and locked mid-game
 void front_ios_focus_event(int ev) {
     if (!g_layer) return;
     switch (ev) {
         case 0: dm_gamepad_reset(); dm_focus_set(2); break;
-        case 1: UIApplication.sharedApplication.idleTimerDisabled = NO; dm_focus_set(3); g_audio_bg = 1; front_ios_audio_apply(); guest_clock_freeze_for(1, 1); front_ios_gfx_hold(); break;
-        case 2: g_audio_bg = 0; front_ios_gfx_hold(); guest_clock_freeze_for(1, 0); front_ios_audio_session(); front_ios_audio_apply(); dm_focus_set(2); break;
+        case 1: UIApplication.sharedApplication.idleTimerDisabled = NO; dm_focus_set(3); g_audio_bg = 1; front_ios_audio_apply(); guest_clock_freeze_for(1, 1); dm_gfx_suspend(1); break;
+        case 2: dm_gfx_suspend(0); guest_clock_freeze_for(1, 0); front_ios_audio_session(); g_audio_bg = 0; front_ios_audio_apply(); dm_focus_set(2); break;
         case 3:   // Becoming active again also ends an interruption whose "ended" never came (not every one sends it), and retries a session that would not activate on the way back
             UIApplication.sharedApplication.idleTimerDisabled = YES;
             if (g_audio_intr) { LOG("audio session: active again with no interruption-ended notice; resuming"); g_audio_intr = 0; g_session_off = 1; }
             if (g_session_off) front_ios_audio_session();
-            front_ios_audio_apply(); dm_gamepad_active(); dm_focus_set(g_menu_hold ? 2 : 1); break;   // the menu still open: out of focus until it closes
+            front_ios_audio_apply(); dm_gamepad_active(); dm_focus_set(1); break;
     }
 }
 
-// The in-game menu holds the game while it is open, as the background does (the Switch's HOME menu likewise takes the focus and suspends the game): focus lost, guest clock frozen
-// with guest reads of it waiting (reason 3, hle_os.c), the real audio output off and graphics suspended, the last picture staying on screen. Every key is released first
-void front_menu_hold(int on) {
-    if (!g_layer || g_menu_hold == !!on) return;
-    uint64_t t0 = now_ns();
-    if (on) {
-        g_menu_hold = 1; dm_gamepad_reset(); dm_focus_set(2); guest_clock_freeze_for(3, 1); front_ios_audio_apply(); front_ios_gfx_hold();
-    } else {
-        g_menu_hold = 0; front_ios_gfx_hold(); guest_clock_freeze_for(3, 0); front_ios_audio_apply();
-        dm_focus_set(UIApplication.sharedApplication.applicationState == UIApplicationStateActive ? 1 : 2);
-    }
-    LOG("front end: in-game menu %s the game (%.1f ms)", on ? "holds" : "releases", (now_ns() - t0) / 1e6);
-}
 void front_menu_quit(void) { dm_host_shutdown("quit from the in-game menu"); }

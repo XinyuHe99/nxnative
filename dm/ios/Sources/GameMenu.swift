@@ -1,11 +1,10 @@
 // In-game menu: a swipe in from the left edge of the screen opens a panel over the game (front_ios.m installs it over the root view once the game starts). The panel follows the finger and
-// opens past 35 % of its width or on a quick flick; while it is fully open the game is held (front_menu_hold: as in the background) unless the player turned that off (Pause while the
-// menu is open, NSUserDefaults DmMenuPause, on by default; it takes effect at once, open or not), and it closes from Resume, the close button, a tap on
+// opens past 35 % of its width or on a quick flick. The game keeps running under it; it closes from Continue, the close button, a tap on
 // the dimmed picture or a swipe back to the left. A swipe that lands on a virtual-gamepad control is left to the gamepad (dm_pad_takes), so the left stick near the edge keeps working.
 // What it offers, all through DmMenu.h: resume, a screenshot (the next presented frame as PNG into Documents/Screenshots, then into Photos when allowed), shaking the controller, quitting;
-// the virtual gamepad's layout, opacity, hide switch and touch feedback; the console mode (handheld / docked, hle_oe.c pushes the change to the game), the performance overlay
-// (off, frame rate or the performance panel, DmPerfPanel.m), Ambient mode (front_ios.m) and sound. A console mode, performance overlay, Ambient mode or touch feedback chosen here is also kept as the launcher's choice for the next start (Launcher.swift's "launcher.<variable>" keys), unless an env file
-// set that variable. Those four rows follow the game's own settings list (dmOfferedSettings, as the launcher shows it): a game or a device without one leaves its row out. The first few starts show a short hint at the left edge. DM_MENU=0 leaves the menu out, DM_MENU=open opens it a second after the game starts (for testing)
+// the virtual gamepad's layout, opacity, hide switch and touch feedback; the console mode (handheld / docked, hle_oe.c pushes the change to the game), Ambient mode (front_ios.m)
+// and sound. A console mode, Ambient mode or touch feedback chosen here is also kept as the launcher's choice for the next start (Launcher.swift's "launcher.<variable>" keys), unless an env file
+// set that variable. Those three rows follow the game's own settings list (dmOfferedSettings, as the launcher shows it): a game or a device without one leaves its row out. The first few starts show a short hint at the left edge. DM_MENU=0 leaves the menu out, DM_MENU=open opens it a second after the game starts (for testing)
 import Photos
 import SwiftUI
 import UIKit
@@ -17,18 +16,15 @@ private func note(_ s: String) { fputs("menu: \(s)\n", stderr) }
 
 private final class MenuModel: ObservableObject {
     @Published var progress: CGFloat = 0   // 0 closed .. 1 open
-    @Published var holding = false
     @Published var layout = 0
     @Published var docked = false
     @Published var controller = false
     @Published var opacity = 0.5
     @Published var hidden = false
     @Published var haptics = true
-    @Published var perfMode = 0   // 0 off, 1 frame rate, 2 performance panel
     @Published var ambient = false
-    @Published var pauseOnOpen = MenuModel.pauseSetting
     @Published var muted = false
-    @Published var fps = -1.0
+    @Published var fps = -1.0   // frames on screen per second between two looks (stats), -1 before the second look
     @Published var memory: UInt64 = 0
     @Published var thermal = 0
     @Published var battery: Float = -1
@@ -36,20 +32,22 @@ private final class MenuModel: ObservableObject {
     @Published var hint = false
     @Published var confirmQuit = false
     var close: (_ then: (() -> Void)?) -> Void = { _ in }
-    var syncHold: () -> Void = {}   // MenuController: hold or release the game for the open menu and this setting
-    static var pauseSetting: Bool { UserDefaults.standard.object(forKey: "DmMenuPause") as? Bool ?? true }
     private let offered = dmOfferedSettings()
     func offers(_ env: String) -> Bool { offered?.contains(env) ?? (env != "DM_AMBIENT" || dmLetterboxed()) }
     private var toastGen = 0
+    private var frames0: UInt64 = 0, time0 = 0.0
 
     func read() {
         layout = Int(dm_pad_layout()); docked = dm_opmode() != 0; controller = dm_pad_controller()
         opacity = dm_pad_opacity(); hidden = dm_pad_hidden(); haptics = dm_pad_haptics()
-        perfMode = Int(front_menu_perf_mode()); ambient = front_menu_ambient(); muted = front_menu_muted(); pauseOnOpen = MenuModel.pauseSetting
+        ambient = front_menu_ambient(); muted = front_menu_muted()
+        fps = -1; frames0 = UInt64(mtl_present_count()); time0 = CACurrentMediaTime()
         stats()
     }
     func stats() {
-        fps = front_menu_fps(); memory = UInt64(os_proc_available_memory()); thermal = Int(dm_thermal_now())
+        let n = UInt64(mtl_present_count()), t = CACurrentMediaTime()
+        if t - time0 >= 0.25 { fps = Double(n &- frames0) / (t - time0); frames0 = n; time0 = t }
+        memory = UInt64(os_proc_available_memory()); thermal = Int(dm_thermal_now())
         battery = UIDevice.current.batteryLevel
     }
     func show(_ message: String) {
@@ -77,13 +75,8 @@ private final class MenuModel: ObservableObject {
     func setOpacity(_ a: Double) { dm_pad_set_opacity(a); opacity = dm_pad_opacity() }
     func setHidden(_ on: Bool) { dm_pad_set_hidden(on); hidden = on }
     func setHaptics(_ on: Bool) { dm_pad_set_haptics(on); haptics = on; remember("DM_TOUCH_HAPTICS", on ? "1" : "0") }
-    func setPerf(_ mode: Int) { front_menu_set_perf_mode(Int32(mode)); perfMode = mode; remember("DM_PERF_OVERLAY", String(mode)) }
     func setAmbient(_ on: Bool) { front_menu_set_ambient(on); ambient = front_menu_ambient(); remember("DM_AMBIENT", on ? "1" : "0") }
     func setMuted(_ on: Bool) { front_menu_set_muted(on); muted = on }
-    func setPause(_ on: Bool) {
-        UserDefaults.standard.set(on, forKey: "DmMenuPause"); pauseOnOpen = on
-        note("pause while the menu is open: \(on ? "on" : "off")"); syncHold()
-    }
 
     func shake() { close { dm_pad_shake(0.6) } }
     func screenshot() {
@@ -197,7 +190,7 @@ private struct MenuPanel: View {
                 header
                 stats
                 actions
-                Card(title: "Game") { game }
+                if m.offers("DM_OPMODE") || m.offers("DM_AMBIENT") { Card(title: "Game") { game } }   // a game with neither row has no Game card
                 Card(title: "Controls", tag: m.controller ? "Controller connected" : nil) { controls }
                 Button(role: .destructive) { m.confirmQuit = true } label: {
                     Label("Quit Game", systemImage: "power").font(.body.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 30)
@@ -218,11 +211,7 @@ private struct MenuPanel: View {
             if let icon = appIcon() {
                 Image(uiImage: icon).resizable().frame(width: 44, height: 44).clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             }
-            VStack(alignment: .leading, spacing: 2) {
-                Text((info("CFBundleDisplayName") as? String) ?? tr("Game")).font(.headline).lineLimit(1)
-                Label(m.holding ? LocalizedStringKey("Paused") : LocalizedStringKey("Running"), systemImage: m.holding ? "pause.fill" : "play.fill")
-                    .font(.caption.weight(.medium)).foregroundStyle(m.holding ? .orange : .green)
-            }
+            Text((info("CFBundleDisplayName") as? String) ?? tr("Game")).font(.headline).lineLimit(2)
             Spacer(minLength: 8)
             Button { m.close(nil) } label: { Image(systemName: "xmark").font(.body.weight(.semibold)).frame(width: 30, height: 30) }
                 .buttonStyle(.glass).buttonBorderShape(.circle).accessibilityLabel(Text("Close"))
@@ -275,7 +264,7 @@ private struct MenuPanel: View {
 
     @ViewBuilder var game: some View {
         if m.offers("DM_OPMODE") {
-            Row(title: "Console mode") {
+            Row(title: "Console mode", last: !m.offers("DM_AMBIENT")) {
                 Picker("Console mode", selection: Binding(get: { m.docked }, set: { m.setDocked($0) })) {
                     Text("Handheld").tag(false)
                     Text("Docked").tag(true)
@@ -283,20 +272,9 @@ private struct MenuPanel: View {
                 .pickerStyle(.segmented).labelsHidden().frame(width: 160)
             }
         }
-        if m.offers("DM_PERF_OVERLAY") {
-            Row(title: "Performance overlay") {
-                Picker("Performance overlay", selection: Binding(get: { m.perfMode }, set: { m.setPerf($0) })) {
-                    Text("Off").tag(0)
-                    Text("FPS").tag(1)
-                    Text("Panel").tag(2)
-                }
-                .pickerStyle(.segmented).labelsHidden().frame(width: 160)
-            }
-        }
         if m.offers("DM_AMBIENT") {
-            Row(title: "Ambient mode") { Toggle("", isOn: Binding(get: { m.ambient }, set: { m.setAmbient($0) })).labelsHidden() }
+            Row(title: "Ambient mode", last: true) { Toggle("", isOn: Binding(get: { m.ambient }, set: { m.setAmbient($0) })).labelsHidden() }
         }
-        Row(title: "Pause while the menu is open", last: true) { Toggle("", isOn: Binding(get: { m.pauseOnOpen }, set: { m.setPause($0) })).labelsHidden() }
     }
 
     private func appIcon() -> UIImage? {
@@ -368,7 +346,6 @@ private final class MenuController: NSObject, UIGestureRecognizerDelegate {
     let host: UIHostingController<MenuOverlay>
     weak var root: UIViewController?
     private var timer: Timer?
-    private var isOpen = false   // fully open (the opening animation finished), until a close starts
     private var generation = 0   // an animation's completion acts only if no later open / close came after it
 
     init(root: UIViewController) {
@@ -386,7 +363,6 @@ private final class MenuController: NSObject, UIGestureRecognizerDelegate {
         edge.edges = .left; edge.delegate = self
         root.view.addGestureRecognizer(edge)
         model.close = { [weak self] then in self?.animate(open: false, then: then) }
-        model.syncHold = { [weak self] in self?.syncHold() }
         UIDevice.current.isBatteryMonitoringEnabled = true
         let shown = UserDefaults.standard.integer(forKey: "DmMenuHintShown")
         if shown < 3 {
@@ -421,13 +397,6 @@ private final class MenuController: NSObject, UIGestureRecognizerDelegate {
         }
     }
 
-    // The game is held while the menu is fully open and the player wants it paused; a change of the setting with the menu open applies at once
-    private func syncHold() {
-        let want = isOpen && model.pauseOnOpen
-        if want == model.holding { return }
-        front_menu_hold(want ? 1 : 0); model.holding = want
-    }
-
     func animate(open: Bool, then: (() -> Void)? = nil) {
         generation += 1; let gen = generation
         if open {
@@ -435,14 +404,13 @@ private final class MenuController: NSObject, UIGestureRecognizerDelegate {
             host.view.isUserInteractionEnabled = true
             withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) { model.progress = 1 } completion: { [weak self] in
                 guard let self, self.generation == gen else { return }
-                self.isOpen = true; self.syncHold(); self.model.stats()
+                self.model.stats()
                 self.timer?.invalidate()
                 self.timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.model.stats() }
             }
             note("open")
         } else {
             timer?.invalidate(); timer = nil
-            isOpen = false; syncHold()   // the game runs again while the panel slides away
             withAnimation(.spring(response: 0.3, dampingFraction: 0.92)) { model.progress = 0 } completion: { [weak self] in
                 guard let self, self.generation == gen else { return }
                 self.host.view.isUserInteractionEnabled = false

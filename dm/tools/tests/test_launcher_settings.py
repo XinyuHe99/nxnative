@@ -1,4 +1,4 @@
-"""The launcher's settings (dm/games/settings.tsv through dm/games/settings.py): rows by graphics API and profile, single-screen sections, toggle values, Ambient mode and the performance overlay, and the strict format;
+"""The launcher's settings (dm/games/settings.tsv through dm/games/settings.py): rows by graphics API and profile, single-screen sections, toggle values, Ambient mode and the strict format;
 the meta column's optional fields, and the written list against docs/launcher.schema.json, the contract front ends read."""
 import importlib.util
 import json
@@ -59,10 +59,10 @@ class LauncherSettingsTests(unittest.TestCase):
         s = build(BOTW, 'nvn')['DM_AMBIENT']
         self.assertEqual((s['on'], s['off']), ('1', '0'))
 
-    def test_iphone_switches_only_on_the_iphone(self):   # the performance overlay, Ambient mode and touch feedback are the iOS front end's (front_ios.m, DmGamepad.m)
+    def test_iphone_switches_only_on_the_iphone(self):   # the frame-rate counter, Ambient mode and touch feedback are the iOS front end's (front_ios.m, DmGamepad.m)
         ios, mac = build(BOTW, 'nvn'), build(BOTW, 'nvn', 'mac')
         self.assertEqual(build(BOTW, 'nvn', 'ios').keys(), ios.keys())   # ios when unset
-        self.assertEqual(set(ios) - set(mac), {'DM_PERF_OVERLAY', 'DM_AMBIENT', 'DM_TOUCH_HAPTICS'})
+        self.assertEqual(set(ios) - set(mac), {'DM_SHOW_FPS', 'DM_AMBIENT', 'DM_TOUCH_HAPTICS'})
         self.assertIn('DM_RUMBLE', mac); self.assertIn('DM_METAL_HUD', mac)
         self.assertEqual(set(mac) - set(ios), {'DM_FULLSCREEN'})   # the Mac window's Display mode (front_mac.m reads 1 or 0)
         s = mac['DM_FULLSCREEN']
@@ -162,14 +162,11 @@ class LauncherSettingsTests(unittest.TestCase):
                     settings.build(BOTW, tmp, Path(tmp) / 'control.nacp')
                 self.assertIn(why, str(e.exception))
 
-    def test_ambient_mode_and_performance_overlay_for_every_game(self):   # Ambient mode off by default; the overlay's default follows the IPA build's SHOW_FPS
+    def test_ambient_mode_for_every_game(self):   # off by default
         for api, gid in [('nvn', BOTW), ('vulkan', '0100535012974000'), ('gl', '010014E00DB56000')]:
             with self.subTest(api=api):
-                rows = build(gid, api)
-                self.assertEqual((rows['DM_AMBIENT']['kind'], rows['DM_AMBIENT']['section'], rows['DM_AMBIENT']['default']), ('toggle', 'Game', '0'))
-                s = rows['DM_PERF_OVERLAY']
-                self.assertEqual((s['kind'], s['section'], [o[0] for o in s['options']]), ('choice', 'Game', ['0', '1', '2']))
-                self.assertNotIn('DM_SHOW_FPS', rows)
+                s = build(gid, api)['DM_AMBIENT']
+                self.assertEqual((s['kind'], s['section'], s['default']), ('toggle', 'Game', '0'))
 
 
 def conforms(value, node, root, at='$'):

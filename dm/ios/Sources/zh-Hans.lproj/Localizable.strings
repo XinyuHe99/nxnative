@@ -54,8 +54,6 @@
 
 /* In-game menu (GameMenu.swift) */
 "Swipe in from the left edge for the menu" = "从左边缘向右滑动打开菜单";
-"Paused" = "已暂停";
-"Running" = "运行中";
 "Close" = "关闭";
 "FPS" = "帧率";
 "Memory free" = "可用内存";
@@ -82,22 +80,9 @@
 "Screenshot saved to Files › Screenshots" = "截图已存入“文件” › Screenshots";
 "Screenshot failed" = "截图失败";
 
-/* In-game menu: performance and pause */
-"Pause while the menu is open" = "打开菜单时暂停";
-
-/* Performance overlay (launcher, menu, DmPerfPanel.m) */
-"Performance overlay" = "性能显示";
-"Off, frame rate or detailed performance panel." = "可关闭，或显示帧率与详细性能面板。";
-"Off" = "关闭";
-"Panel" = "面板";
-"Performance panel" = "性能面板";
+/* Frame-rate counter (launcher; front_ios.m) */
+"Frame-rate counter" = "帧率计数器";
 "Controller connected" = "已连接手柄";
-"frames/s" = "帧/秒";
-"Frame time" = "平均帧时";
-"Memory" = "内存";
-
-"GPU time" = "GPU 耗时";
-"CPU usage" = "CPU 占用";
 
 "Continue" = "继续";
 
