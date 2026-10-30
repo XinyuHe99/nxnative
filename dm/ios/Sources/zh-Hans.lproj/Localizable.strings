@@ -101,3 +101,5 @@
 "Dynamic resolution" = "动态分辨率";
 "Adjusts resolution between 70% and 100% under load. Turn off to keep full resolution for the selected console mode." = "负载高时在 70% 到 100% 之间调整分辨率。关闭后保持所选运行模式的完整分辨率。";
 "Game files unusable." = "游戏文件无法使用。";
+
+"This device is not supported." = "此设备不受支持。";

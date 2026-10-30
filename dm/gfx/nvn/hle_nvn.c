@@ -74,7 +74,9 @@ typedef struct { const char *name; void *fn; } nvn_impl;
 
 static int g_log;
 static pthread_mutex_t g_sub_mu = PTHREAD_MUTEX_INITIALIZER;
-uint64_t nvn_new_serial(void) { static _Atomic uint64_t n; return ++n; }
+static _Atomic uint64_t g_serial;
+uint64_t nvn_new_serial(void) { return ++g_serial; }
+void nvn_serial_floor(uint64_t s) { uint64_t c = atomic_load(&g_serial); while (c < s && !atomic_compare_exchange_weak(&g_serial, &c, s)) {} }
 static unsigned g_nsem;                          // Number of semantic implementations (filled by nvn_init_slots)
 #define OLOG(...) do { if (g_log) LOG("[nvn] " __VA_ARGS__); } while (0)
 
@@ -1080,9 +1082,9 @@ NVN(nvnCommandBufferCopyTextureToTexture, void, NVNcommandBuffer *c, const NVNte
     copy_view(&o->sv, &o->has_sv, sv); copy_view(&o->dv, &o->has_dv, dv); o->sr = *sr; o->dr = *dr; o->flags = flags;
 }
 // A textured rectangle into the bound colour targets, replayed as draw_tex (nvn_mtl.m). The handle's IDs are moved to the pools this command buffer bound, as bind_handles does:
-// Streets of Rage 4 draws its movie frames into its scene target this way, from a second texture pool
+// Streets of Rage 4 draws its movie frames into its scene target this way, from a second texture pool. Only the handle's lower 32 bits reach the GPU (bind_handles)
 NVN(nvnCommandBufferDrawTexture, void, NVNcommandBuffer *c, NVNtextureHandle h, const NVNdrawTextureRegion *d, const NVNdrawTextureRegion *s) {
-    uint64_t tid = (uint64_t)h & 0xfffff, sid = (uint64_t)h >> 20;
+    uint64_t tid = (uint32_t)h & 0xfffff, sid = (uint32_t)h >> 20;
     if (tid) tid += (uint64_t)CB(c)->tex_base;
     if (sid) sid += (uint64_t)CB(c)->samp_base;
     *REC(c, OP_DRAW_TEX, p_draw_tex) = (p_draw_tex){tid | sid << 20, *d, *s};

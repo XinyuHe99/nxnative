@@ -123,6 +123,34 @@ The game may also write into an NVN object directly, without an NVN call, throug
 - **Fix:** dead serials go to a 512-entry table (`tex_put`, `g_ghost`; the memory line's `finalized textures still referenced`).
 - **Found on:** [The Legend of Zelda: Breath of the Wild](../../dm/games/01007EF00011E000/README.md) (the HUD captures, the 640×360 buffers; found while fixing GitHub issue #9).
 
+### A replay's own objects take serials above a capture's
+
+- **Symptom:** `nvn_replay` aborts on a game's capture with `-[NvProg width]: unrecognized selector` (from `rt_dims`) or `-[NvProg mipmapLevelCount]`: a render target resolves to a program.
+- **Cause:** a capture's textures and programs keep the live run's serials, while the replay layer's own objects (the combined program `bind_stages` makes when a game binds its shader stages from separate programs) took theirs from the replayer's counter, which starts at 1. Textures and programs share the serial table (`tex_get`, `serial_put`), so a combined program could take an early texture's serial and replace it there.
+- **Fix:** `nvn_replay` raises the counter to 2^61 before it loads a capture (`nvn_serial_floor`); a live run's serials stay far below that, and external textures take 2^62 and up. `check_t_capture_live` binds two programs to separate stages to cover it.
+- **Found on:** [Pokemon Scarlet](../../dm/games/0100A3D008C5C000/README.md) (frame 3000 of its regression route).
+
+### A captured texture ID whose memory pool was finalized
+
+- **Symptom:** `DM_NVN_CAPTURE` reports `a record names … (0 bytes), outside every pool … texture registry entry …` for some texture IDs, with addresses that look like data; one capture stopped with `a sparse virtual pool (step 1 does not capture page tables): the capture is incomplete`, another with `straddles a region`.
+- **Cause:** the game finalizes a texture's memory pool, frees the pool object and reuses its memory, and leaves the texture ID registered. The host marks such an ID `gone` (`treg_drop_pool_views`: nothing makes its texture until the ID is registered again), but the capture did not record that state. It walked the entry's texture fields and read the dead pool object through `tex_t.pool`: the bytes now there (Scarlet: a texture's data, such as `0x2492492492497f80`) became the pool's address, size and mode.
+- **Fix:** a registry entry carries `gone` (`cap_treg`), and a gone entry keeps neither its pool nor its storage address and is not read back. `nvn_replay` registers it and then marks it gone (`mtl_reg_tex_gone`), as the live run left it. Captures made before keep working (the byte was padding, 0). `check_t_capture_live` registers a texture on a pool of its own and finalizes that pool, then fills the pool object with such bytes. Without the fix the capture is incomplete.
+- **Found on:** [Pokemon Scarlet](../../dm/games/0100A3D008C5C000/README.md) (texture IDs 1726 to 1786 in the bedroom, each texture with a pool of its own).
+
+### A frame capture runs under the standard thread policy
+
+- **Symptom:** `regress.py capture` stops with `frame N was not captured within … s` although the game reached the frame before it; a capture takes 5 to 20 minutes where an earlier one of the same frame took 2 to 3, and a sample of the host shows the submitting thread in `lzfseEncodeBase` under `nvn_cap_submit`.
+- **Cause:** the capture's steps run on the thread that submits or presents, and that thread can hold a time-constraint (real-time) policy declared for a few milliseconds a frame ([time-constraint computation declared below the thread's peaks](frame-rate.md#time-constraint-computation-declared-below-the-threads-peaks)). A step that runs for minutes far exceeds the declaration, and the kernel lets the thread run only in short slices: Pokemon Scarlet's pool bytes took 1,175 s to compress where the same data takes 55 s outside the host. The harness also counted the capture step's 300 s without a frame as a hang.
+- **Fix:** each capture step runs under the standard policy, and the thread gets its own policy back after it (`cap_policy_standard`, `cap_policy_restore` in `nvn_capture.inc`). Scarlet's frame 3000 now takes 53 s to capture (1,178 s before), Breath of the Wild's frame 5000 34 s (124 s). The log gives each step's time (`submit N: registries and their textures …, records …, pool bytes …`). `regress.py capture` bounds the step by `--capture-limit` instead of the hang time. The pool bytes are also copied last in the step, as the live replay of the submit reads them, and once.
+- **Found on:** [Pokemon Scarlet](../../dm/games/0100A3D008C5C000/README.md) and [Breath of the Wild](../../dm/games/01007EF00011E000/README.md) (their regression route captures).
+
+### A capture refused after a change to the reflection structs
+
+- **Symptom:** `nvn_replay` stops with `program #N (a key …) stage S: the translated shader's bindings or inputs differ from the ones the records were captured against`, and `regress.py replay` reports every game's capture as one the candidate cannot replay, while the shaders' reflection (`<key>_b.json`) is the same in both chains apart from the chain field.
+- **Cause:** the capture compares each program's interface with the replayer's through a hash (`cap_iface`), and that hash was of the reflection structs' bytes (`nvn_rbind`, the vertex inputs). 682fdd26 widened `nvn_rbind.n` to 16 bits and added `soff`, so every shader's hash changed although no binding had.
+- **Fix:** the hash is of the values, field by field, and a field at 0 adds nothing, so a field widened or added later keeps the hash of every shader that does not use it; `t_capture_live` pins the hash of one reflection. A capture records its hash kind (header `iface 2`), and `nvn_replay` refuses one of another kind with `capture again`: the captures made before have to be recorded again once.
+- **Found on:** the regression captures of [Breath of the Wild](../../dm/games/01007EF00011E000/README.md), [Pokemon Scarlet](../../dm/games/0100A3D008C5C000/README.md), [Tears of the Kingdom](../../dm/games/0100F2C0115B6000/README.md) and [Super Mario Bros. Wonder](../../dm/games/010015100B514000/README.md) (2026-10-30, all four refused at f5aee5aa).
+
 ## Command memory
 
 ### Host-lent command memory segments
@@ -413,6 +441,14 @@ Games read this count as a position in their own command memory and size their h
 - **Fix:** take the stamp before protecting and reading, and start the last-check generation at that stamp. Finish any pending protection run before waiting for a BUSY page, then retry that page. Both unprotect paths use `stamp_page` to publish the page generation and advance the global clock once more afterward, invalidating checks that ran before publication. These are general tracker and cache rules, with no game-specific gate.
 - **Found on:** [Tears of the Kingdom](../../dm/games/0100F2C0115B6000/README.md), reported in MacNativeGames commit `a166602` and ported through [PR #197](https://github.com/seedds/nxnative/pull/197). The missing-letter symptom has not been reproduced in nxnative; the tracker failures are reproduced locally by the regression tests.
 - **Check:** `t_dirty_race` covers the BUSY-page retry, stamp ordering, and a check between clock allocation and generation publication in both unprotect paths. The publication cases fail on main; the batched case also fails with the original PR applied.
+
+### A retired pool remains read-only
+
+- **Symptom:** a host system call writing into storage after its NVN pool was finalized fails with `EFAULT`; a direct write can fault after the tracker stopped owning the page.
+- **Cause:** `nvn_dirty_protect` found a live range without holding the slot mutex. Pool retirement could restore its pages to writable and mark the range dead before protect changed the page state to BUSY. Protect then set the retired storage read-only, with no live range left to release it. In the same window a new pool could reuse the slot, and protect would then compute its pages from the new pool's base and state array.
+- **Fix:** hold the pool-slot mutex across protect's lookup, page-state transitions and final `mprotect`. Pool creation and retirement already hold that mutex. The page-fault and host pre-write paths still take no slot mutex, so they can finish a BUSY transition while protect waits.
+- **Found on:** code review of the shared tracker, from a fork's compatibility commit `587d5206` ported through [PR #686](https://github.com/seedds/nxnative/pull/686). No game is known to hit it: a game normally finalizes a pool only after the GPU is done with it.
+- **Check:** `t_dirty_retire_race` retires the pool between protect's lookup and its first page-state exchange, then reads 16 bytes into the pool with `read()`. Without the fix, retirement completes first and the read fails with `EFAULT`; with it, retirement waits for protection, unregisters the pool and the read returns 16. `t_dirty_race` and `t_dirty_slots` cover page-state publication and shared / reused pool slots.
 
 ## NVN entry points
 

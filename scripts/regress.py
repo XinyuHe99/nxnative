@@ -90,7 +90,7 @@ usage = load_module('usage', REPO / 'dm/tools/usage.py')   # usage manifests and
 ROOT = Path(os.environ.get('REGRESS_ROOT', ''))
 GAMES = Path(os.environ.get('REGRESS_GAMES', ''))
 HOST_DIRS = ('dm/host', 'dm/gfx', 'dm/gfx/nvn', 'dm/gfx/nvn/include', 'dm/gfx/tex', 'dm/gfx/vk', 'dm/gfx/gl')   # as build_ipa_from_nsp.py: the host's sources and headers
-REWRITER = ('dm/tools/patch_nso.py', 'dm/tools/nso.py', 'dm/tools/nso_code.py', 'dm/tools/nso_asm.py', 'dm/tools/nso_match.py', 'dm/tools/sdk_patches.py')
+REWRITER = ('dm/tools/patch_nso.py', 'dm/tools/nso.py', 'dm/tools/nso_code.py', 'dm/tools/nso_asm.py', 'dm/tools/nso_match.py', 'dm/tools/sdk_patches.py', 'dm/tools/ue_cvar.py', 'dm/tools/ue_malloc.py', 'dm/tools/ue_region.py', 'dm/tools/loader_census.py')
 HEAVY_EXE = {'clang', 'make', 'xcodebuild', 'ld', 'ld64', 'swift-frontend', 'dotnet', 'metal', 'metal-tt', 'air-tt', 'applegpu-nt', 'dmsh_xlate', 'spirv-cross'}   # jobs that skew a measurement
 HEAVY_PY = r'(dmsh_build|shader_split|own_compilers|patch_nso|vk_shaders)\.py'   # (the shared measuring rule)
 # Tolerances, from runs of one revision against itself (docs/development.md, The regression harness)
@@ -247,7 +247,10 @@ class Game:
         self.patched = bench.newest(build.glob('patched_v*'))
         self.ver = self.patched.name.removeprefix('patched_') if self.patched else None
         self.kind = 'nvn' if (build / 'shader/pkg').is_dir() else 'vk' if (build / 'shader/vk').is_dir() else 'gl' if (build / 'shader/gl').is_dir() else None
-        self.derived = (build / 'profile' / self.id / 'game.tsv').is_file()
+        # The build's own profile runs instead of dm/games' only when it is derived (the NSP script's <id>.derived.key beside it: a version the game's profile was not brought up
+        # on) or the game has no profile here (a provisional one). A provisional profile the NSP script left from before the game's profile was added would test its guesses
+        own = build / 'profile' / self.id
+        self.derived = (own / 'game.tsv').is_file() and ((build / 'profile' / f'{self.id}.derived.key').is_file() or not (REPO / 'dm/games' / self.id / 'game.tsv').is_file())
 
     def romfs(self):
         r = bench.rfs.source(self.build / 'extract' / self.ver)
@@ -830,7 +833,7 @@ def run_env(g, art, route, outdir, a):
     else: save.mkdir()
     temp.mkdir()
     env = dict(os.environ, DM_ROOT=str(g.build), DM_ROMFS=str(g.romfs()), DM_SAVE=str(save), DM_TEMP=str(temp), DM_MSL_DIR=str(lib), DM_FONT_DIR=str(g.build / 'font'),
-               DM_WINDOW='1', DM_AUDIO='0', DM_METAL_HUD='0' if a.no_hud else '1', DM_CTL=str(outdir / 'ctl'), TMPDIR=str(game_root(g) / 'tmp') + '/')
+               DM_WINDOW='1', DM_WINDOW_TOP='1', DM_AUDIO='0', DM_METAL_HUD='0' if a.no_hud else '1', DM_CTL=str(outdir / 'ctl'), TMPDIR=str(game_root(g) / 'tmp') + '/')
     if g.kind == 'nvn':
         env.update(DM_NVN_SHMAP=str(prof / 'shader_map.tsv'), DM_NVN_TSV=str(outdir / 'frames.tsv'), DM_NVN_TSV_CALLS='0')
         if not (prof / 'pso_pairs.tsv').is_file() and (g.build / 'shader/pso_pairs.tsv').is_file(): env['DM_PSO_PAIRS'] = str(g.build / 'shader/pso_pairs.tsv')
@@ -860,7 +863,7 @@ def smoke_run(g, tree, art, route, quick, outdir, a):
     text = (outdir / 'log.txt').read_text(errors='replace')
     red, crash_line, prep, _ = read_log(text)
     res.update(exit=r['exit'], hang_at_s=r['hang_at_s'], hang_sample=r['hang_sample'], hang_dump='state dump (DM_CTL dump)' in text, first_frame_s=r['first_frame_s'], max_frame=r['max_frame'], peak_footprint_mb=r['peak_mb'], busy=r['busy'],
-               prepare_s=prep, red=dict(red), crash=None)
+               prepare_s=prep, red=dict(red), crash=None, covered=text.count('front end: window covered'))
     if crash_line or (r['exit'] not in (None, 0)):
         res['crash'] = {'line': normalize_red('[RED] ' + crash_line) if crash_line else None, **(crash_report(r['t0']) or {})}
     if route['reach']:
@@ -1088,9 +1091,13 @@ def smoke_series(g, tree, art, route, quick, label, a, runs):
     for i in range(runs):
         d = game_root(g) / 'runs' / f'{datetime.datetime.now():%Y%m%d-%H%M%S}-{label}-{"quick" if quick else "full"}-{i + 1}'
         say(f'  {g.id}: {label} run {i + 1}/{runs} ({"quick" if quick else "full"}, {route["quick"] if quick else route["secs"]:g} s) → {d}')
-        r = smoke_run(g, tree, art, route, quick, d, a); r['dir'] = str(d); out.append(r)
+        r = smoke_run(g, tree, art, route, quick, d, a); r['dir'] = str(d)
+        if r.get('covered'):   # another window covered the game's (a covered window's display link fires about once a second): its frame times measure nothing, so once more
+            say(f'    the window was covered during the run ({d / "log.txt"}): once more')
+            d = d.with_name(d.name + '-again'); r = smoke_run(g, tree, art, route, quick, d, a); r['dir'] = str(d)
+        out.append(r)
         say(f'    exit {r["exit"]}, max frame {r["max_frame"]}, first frame {r["first_frame_s"]} s, prepare {r["prepare_s"]} s, fps {r.get("fps")}, p99 {r.get("frame_p99")} ms, '
-            f'peak {r["peak_footprint_mb"]} MB, RED kinds {len(r["red"])}' + (f', prebuild {r["prebuild"].get("wall_s")} s' if r.get('prebuild') else '')
+            f'peak {r["peak_footprint_mb"]} MB, RED kinds {len(r["red"])}' + (', window covered' if r.get('covered') else '') + (f', prebuild {r["prebuild"].get("wall_s")} s' if r.get('prebuild') else '')
             + (f', FAIL: {"; ".join(run_failures(r, route))}' if run_failures(r, route) else '')
             + ''.join(f', thread stacks {d / x}' for x in (r.get('hang_sample'), (r.get('prebuild') or {}).get('hang_sample')) if x))
     return out
@@ -1315,7 +1322,9 @@ def cmd_capture(a):
             # the wall clock (DM_DETCLOCK stops some games, waiting for guest time); no pipeline prebuild, and no stand-in pipelines, whose draws would differ from the replay's
             env.update(DM_KEYS=route['keys'], DM_PSO_PREBUILD='0', DM_PSO_HYBRID='0', DM_NVN_CAPTURE=f'{frame}:1:{cap}')
             say(f'  {g.id}: capturing frame {frame} with {tree.id} → {cap}')
-            r = run_watched([art['host'], art['modules']], env, outdir, outdir / 'log.txt', a, limit=a.capture_limit, hang=max(route['hang'], 300), kind='nvn',
+            # the capture step itself shows no frame until it ends (reading back the textures and compressing the pools: about 2 minutes for Breath of the Wild), so only the
+            # capture limit bounds it
+            r = run_watched([art['host'], art['modules']], env, outdir, outdir / 'log.txt', a, limit=a.capture_limit, hang=max(route['hang'], a.capture_limit), kind='nvn',
                             what=f'{g.id} capture', frames=outdir / 'frames.tsv', until=r'DM_NVN_CAPTURE: frame \d+: [^\n]*')
             if not r['until'] or not cap.is_file():
                 raise HarnessError(f'frame {frame} was not captured within {a.capture_limit:g} s (the game reached frame {r["max_frame"]}; see {outdir / "log.txt"})')
@@ -1437,7 +1446,7 @@ def cmd_impact(a):
 def select(a, smoke):
     games = find_games(a.games.split(',') if a.games else None)
     if not games: raise HarnessError(f'no game with a Mac build under {GAMES}')
-    say('games: ' + ', '.join(f"{g.id} ({g.name}, {g.kind}{', route' if g.route() else ''})" for g in games))
+    say('games: ' + ', '.join(f"{g.id} ({g.name}, {g.kind}{', route' if g.route() else ''}{', the build profile' if g.derived else ''})" for g in games))
     return games
 
 
@@ -1507,7 +1516,7 @@ def report_md(rep):
                 pb = r.get('prebuild') or {}
                 L.append(f"  - {label}: exit {r.get('exit')}, first frame {r.get('first_frame_s')} s, max frame {r.get('max_frame')}, reached {r.get('reached')}, prepare {r.get('prepare_s')} s"
                          + (f", prebuild {pb.get('wall_s')} s ({pb.get('built', 0):g} built, {pb.get('failed', 0):g} failed)" if pb else '')
-                         + f", fps {r.get('fps')}, p50/p99 {r.get('frame_p50')}/{r.get('frame_p99')} ms, peak {r.get('peak_footprint_mb')} MB" + (', busy Mac' if r.get('busy') else '')
+                         + f", fps {r.get('fps')}, p50/p99 {r.get('frame_p50')}/{r.get('frame_p99')} ms, peak {r.get('peak_footprint_mb')} MB" + (', busy Mac' if r.get('busy') else '') + (', window covered' if r.get('covered') else '')
                          + (f", missing shader libraries {red_counts(r)[MISSING_LIB]}" if red_counts(r)[MISSING_LIB] else '')
                          + (', hang: state dump in log.txt' if r.get('hang_dump') else '') + (f", thread stacks {r['hang_sample']}" if r.get('hang_sample') else ''))
         rp = g.get('replay')
